@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish Windows release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint & test before shipping
+        run: |
+          bun run lint
+          bun run format:check
+          bun test
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      # Optional Windows Authenticode code signing. Configure these repo
+      # secrets to enable it; the build still produces working (unsigned)
+      # NSIS/MSI installers when they are unset, which is fine for testing
+      # but will trigger SmartScreen warnings for end users.
+      #   WINDOWS_CERTIFICATE           - base64-encoded .pfx certificate
+      #   WINDOWS_CERTIFICATE_PASSWORD  - password for the .pfx file
+      - name: Build & release with tauri-action
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          # Set once the optional updater (see tauri-plugin-updater scaffold)
+          # is enabled and a signing keypair has been generated.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "OctoDock ${{ github.ref_name }}"
+          releaseBody: "See CHANGELOG or commit history for details."
+          releaseDraft: true
+          prerelease: false

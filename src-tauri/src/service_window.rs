@@ -75,11 +75,19 @@ fn apply_bounds(window: &WebviewWindow, bounds: &WindowBounds) -> Result<(), Str
         return Ok(());
     }
 
+    // Round rather than truncate — fractional DPI scale factors (e.g. 1.25x,
+    // 1.5x on Windows) otherwise leave a stray 1px gap/overlap at the edges.
     window
-        .set_position(PhysicalPosition::new(bounds.x as i32, bounds.y as i32))
+        .set_position(PhysicalPosition::new(
+            bounds.x.round() as i32,
+            bounds.y.round() as i32,
+        ))
         .map_err(|e| e.to_string())?;
     window
-        .set_size(PhysicalSize::new(bounds.width as u32, bounds.height as u32))
+        .set_size(PhysicalSize::new(
+            bounds.width.round() as u32,
+            bounds.height.round() as u32,
+        ))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -158,10 +166,10 @@ pub fn switch_service(
         .parent(&main)
         .map_err(|e| e.to_string())?
         .on_navigation(move |nav_url| {
-            if host_allowed(&nav_url, &base_for_nav) {
+            if host_allowed(nav_url, &base_for_nav) {
                 true
             } else {
-                open_external(&app_for_nav, &nav_url);
+                open_external(&app_for_nav, nav_url);
                 false
             }
         })
@@ -191,6 +199,11 @@ pub fn update_service_bounds(
     };
     if let Some(window) = app.get_webview_window(label) {
         apply_bounds(&window, &bounds)?;
+        // Re-showing here is a no-op in the common resize/move case, but it
+        // also covers restoring from a minimized main window, where the
+        // service webview was hidden and needs to reappear once bounds are
+        // known again.
+        window.show().map_err(|e| e.to_string())?;
     }
     Ok(())
 }

@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "eslint .",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{html,ts,js,json,md}\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"index.html\" \"vite.config.ts\" \"package.json\" \"eslint.config.js\" \"README.md\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"index.html\" \"vite.config.ts\" \"package.json\" \"eslint.config.js\" \"README.md\"",
     "test": "bun test"
   },

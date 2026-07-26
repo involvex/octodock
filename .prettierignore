@@ -6,3 +6,12 @@ src-tauri/gen
 .claude
 bun.lock
 *.lock
+
+# Planning/agent-authored docs — never auto-formatted, may be actively edited
+# by an agent session and must not be touched incidentally by `bun run format`.
+*.plan.md
+Implementationplan.md
+Plan.md
+agent-prompt.md
+AGENTS.md
+skills-lock.json

@@ -1,4 +1,5 @@
 import type { ServiceConfig } from "../hooks/useSettingsStore";
+import { ServiceIcon } from "./ServiceIcon";
 
 interface SidebarProps {
   services: ServiceConfig[];
@@ -25,7 +26,7 @@ export function Sidebar({
           title={service.name}
           type="button"
         >
-          {service.icon}
+          <ServiceIcon service={service} className="w-6 h-6" />
         </button>
       ))}
     </div>

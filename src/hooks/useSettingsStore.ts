@@ -8,6 +8,7 @@ import {
   normalizeHotkey,
   type ServiceConfig,
 } from "../lib/settings";
+import { toast } from "../lib/toast";
 
 export type { ServiceConfig };
 export { DEFAULT_SERVICES, DEFAULT_HOTKEY };
@@ -35,6 +36,11 @@ async function getStore(): Promise<Store> {
   return store;
 }
 
+async function markTrayTipSeenInStore(): Promise<void> {
+  const store = await getStore();
+  await store.set("hasSeenTrayTip", true);
+}
+
 export function useSettingsStore() {
   const [services, setServices] = useState<ServiceConfig[]>(DEFAULT_SERVICES);
   const [activeServiceId, setActiveServiceId] = useState(
@@ -42,6 +48,7 @@ export function useSettingsStore() {
   );
   const [hotkey, setHotkeyState] = useState(DEFAULT_HOTKEY);
   const [ready, setReady] = useState(false);
+  const [hasSeenTrayTip, setHasSeenTrayTip] = useState(true);
 
   useEffect(() => {
     void (async () => {
@@ -53,8 +60,10 @@ export function useSettingsStore() {
         loadedServices[0]?.id ??
         "gmail";
       const savedHotkey = (await store.get<string>("hotkey")) ?? DEFAULT_HOTKEY;
+      const seenTrayTip = (await store.get<boolean>("hasSeenTrayTip")) ?? false;
 
       setServices(loadedServices);
+      setHasSeenTrayTip(seenTrayTip);
       setActiveServiceId(
         loadedServices.some((s) => s.id === last)
           ? last
@@ -65,7 +74,11 @@ export function useSettingsStore() {
       try {
         await invoke("set_hotkey", { hotkey: savedHotkey });
       } catch {
-        // Keep UI value; registration may fail if already taken.
+        // Keep UI value; registration may fail if already taken by another app.
+        toast(
+          `Couldn't register hotkey ${savedHotkey} — it may be in use by another app. Change it in Settings.`,
+          "error",
+        );
       }
 
       setReady(true);
@@ -143,6 +156,11 @@ export function useSettingsStore() {
     return applied;
   }, []);
 
+  const markTrayTipSeen = useCallback(() => {
+    setHasSeenTrayTip(true);
+    void markTrayTipSeenInStore();
+  }, []);
+
   const activeService =
     services.find((s) => s.id === activeServiceId) ?? services[0] ?? null;
 
@@ -152,6 +170,8 @@ export function useSettingsStore() {
     activeServiceId,
     activeService,
     hotkey,
+    hasSeenTrayTip,
+    markTrayTipSeen,
     setActiveService,
     addService,
     removeService,

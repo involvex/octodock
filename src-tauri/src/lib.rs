@@ -99,7 +99,7 @@ fn set_hotkey(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(Mutex::new(ServiceWindowState::default()))
         .manage(Mutex::new(HotkeyState {
             current: None,
@@ -114,7 +114,12 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_autostart::Builder::new().build())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+
+    #[cfg(feature = "updater")]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::new()

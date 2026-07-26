@@ -44,6 +44,20 @@ export function prefersBrowser(service: ServiceConfig): boolean {
   return service.openInBrowser === true;
 }
 
+/**
+ * Resolves a favicon URL for a service via Google's favicon proxy, so the
+ * sidebar/settings show each service's real branding instead of a generic
+ * emoji. Returns null for URLs that can't be parsed (falls back to emoji).
+ */
+export function faviconUrl(url: string, size = 64): string | null {
+  try {
+    const host = new URL(url).host;
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=${size}`;
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeHotkey(input: string): string {
   return input
     .split("+")

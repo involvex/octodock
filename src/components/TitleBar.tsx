@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppState } from "../hooks/useAppState";
@@ -12,13 +13,18 @@ export function TitleBar({ onOpenSettings, activeService }: TitleBarProps) {
   const { isAlwaysOnTop, toggleAlwaysOnTop } = useAppState();
   const appWindow = getCurrentWindow();
 
+  // Service webviews are separate native windows layered over the content
+  // area, so minimizing/hiding the main window must explicitly hide them too
+  // — otherwise they stay floating on screen with nothing behind them.
   const handleMinimize = () => {
+    void invoke("hide_service_windows");
     void appWindow.minimize();
   };
   const handleMaximize = () => {
     void appWindow.toggleMaximize();
   };
   const handleClose = () => {
+    void invoke("hide_service_windows");
     void appWindow.hide();
   };
 

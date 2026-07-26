@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import type { ServiceConfig } from "../hooks/useSettingsStore";
 import { DEFAULT_HOTKEY } from "../lib/settings";
+import { ServiceIcon } from "./ServiceIcon";
+import { HotkeyRecorderButton } from "./HotkeyRecorder";
+import { toast } from "../lib/toast";
 
 interface SettingsModalProps {
   open: boolean;
@@ -106,10 +109,12 @@ export function SettingsModal({
     try {
       const applied = await onSetHotkey(hotkeyDraft);
       setHotkeyDraft(applied);
+      toast(`Global hotkey set to ${applied}`);
     } catch (err) {
-      setHotkeyError(
-        err instanceof Error ? err.message : "Failed to register hotkey",
-      );
+      const message =
+        err instanceof Error ? err.message : "Failed to register hotkey";
+      setHotkeyError(message);
+      toast(message, "error");
     }
   };
 
@@ -170,6 +175,7 @@ export function SettingsModal({
                   placeholder={DEFAULT_HOTKEY}
                   className="flex-1 rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white"
                 />
+                <HotkeyRecorderButton onRecord={setHotkeyDraft} />
                 <button
                   type="button"
                   onClick={() => void handleSaveHotkey()}
@@ -199,7 +205,7 @@ export function SettingsModal({
                   className="rounded-lg border border-gray-800 bg-gray-950 px-3 py-2 space-y-2"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-lg">{service.icon}</span>
+                    <ServiceIcon service={service} className="w-5 h-5" />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-white truncate">
                         {service.name}

@@ -30,6 +30,14 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
+# Optional auto-updater, off by default — see docs/updater.md before enabling.
+tauri-plugin-updater = { version = "2", optional = true }
+
+[features]
+# Disabled until a signing keypair + update endpoint are configured; see
+# docs/updater.md. Enable with `cargo build --features updater` (or add it
+# to the default feature set once ready to ship auto-updates).
+updater = ["dep:tauri-plugin-updater"]
 
 [profile.dev]
 debug = 0
