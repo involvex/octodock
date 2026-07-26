@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ServiceConfig } from "../hooks/useSettingsStore";
+import { prefersBrowser } from "../lib/settings";
 
 export interface WindowBounds {
   x: number;
@@ -36,12 +38,20 @@ async function measureBounds(
 
 export function ServiceContentArea({ service }: ServiceContentAreaProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const browserMode = service ? prefersBrowser(service) : false;
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !service) return;
 
     let cancelled = false;
+
+    if (browserMode) {
+      void invoke("hide_service_windows");
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const sync = async (switchService: boolean) => {
       const bounds = await measureBounds(el);
@@ -83,7 +93,36 @@ export function ServiceContentArea({ service }: ServiceContentAreaProps) {
         }
       });
     };
-  }, [service]);
+  }, [service, browserMode]);
+
+  if (!service) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm bg-gray-950">
+        No service selected
+      </div>
+    );
+  }
+
+  if (browserMode) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 bg-gray-950 px-6 text-center">
+        <div className="text-4xl">{service.icon}</div>
+        <h2 className="text-lg font-semibold text-white">{service.name}</h2>
+        <p className="max-w-md text-sm text-gray-400">
+          Google often blocks sign-in inside embedded webviews. Open{" "}
+          {service.name} in your system browser instead, or turn off “Open in
+          browser” in Settings to try embedding.
+        </p>
+        <button
+          type="button"
+          className="rounded-md bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500"
+          onClick={() => void openUrl(service.url)}
+        >
+          Open {service.name} in browser
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -92,9 +131,7 @@ export function ServiceContentArea({ service }: ServiceContentAreaProps) {
       aria-label="Service content area"
     >
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <span className="text-gray-500 text-sm">
-          {service ? `Loading ${service.name}…` : "No service selected"}
-        </span>
+        <span className="text-gray-500 text-sm">Loading {service.name}…</span>
       </div>
     </div>
   );

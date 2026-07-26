@@ -36,7 +36,7 @@ fn same_site(a: &Url, b: &Url) -> bool {
         && a.port_or_known_default() == b.port_or_known_default()
 }
 
-fn host_allowed(nav_url: &Url, base_url: &Url) -> bool {
+pub fn host_allowed(nav_url: &Url, base_url: &Url) -> bool {
     if same_site(nav_url, base_url) {
         return true;
     }
@@ -211,4 +211,37 @@ pub fn show_active_service_window(
 ) -> Result<(), String> {
     show_active_service(&app, &state);
     Ok(())
+}
+
+#[tauri::command]
+pub fn open_url_in_browser(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed = Url::parse(&url).map_err(|e| e.to_string())?;
+    open_external(&app, &parsed);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_same_site_navigation() {
+        let base = Url::parse("https://mail.google.com").unwrap();
+        let nav = Url::parse("https://mail.google.com/mail/u/0").unwrap();
+        assert!(host_allowed(&nav, &base));
+    }
+
+    #[test]
+    fn allows_google_family_redirects() {
+        let base = Url::parse("https://mail.google.com").unwrap();
+        let nav = Url::parse("https://accounts.google.com/ServiceLogin").unwrap();
+        assert!(host_allowed(&nav, &base));
+    }
+
+    #[test]
+    fn rejects_unrelated_external_hosts() {
+        let base = Url::parse("https://mail.google.com").unwrap();
+        let nav = Url::parse("https://example.com").unwrap();
+        assert!(!host_allowed(&nav, &base));
+    }
 }

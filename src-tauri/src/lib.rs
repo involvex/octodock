@@ -1,9 +1,11 @@
+mod hotkey;
 mod service_window;
 
 use std::sync::Mutex;
 
+use hotkey::{default_hotkey, parse_shortcut};
 use service_window::{
-    hide_all_service_windows, hide_service_windows, show_active_service,
+    hide_all_service_windows, hide_service_windows, open_url_in_browser, show_active_service,
     show_active_service_window, switch_service, update_service_bounds, ServiceWindowState,
 };
 use tauri::{
@@ -11,7 +13,13 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+#[derive(Default)]
+struct HotkeyState {
+    current: Option<Shortcut>,
+    label: String,
+}
 
 #[tauri::command]
 fn toggle_window_visibility(app: tauri::AppHandle) {
@@ -32,7 +40,9 @@ fn toggle_window_visibility(app: tauri::AppHandle) {
 #[tauri::command]
 fn set_always_on_top(app: tauri::AppHandle, on_top: bool) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
-        window.set_always_on_top(on_top).map_err(|e| e.to_string())?;
+        window
+            .set_always_on_top(on_top)
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -55,12 +65,46 @@ fn is_window_visible(app: tauri::AppHandle) -> bool {
     }
 }
 
+#[tauri::command]
+fn get_hotkey(state: tauri::State<'_, Mutex<HotkeyState>>) -> Result<String, String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    if guard.label.is_empty() {
+        Ok(default_hotkey().to_string())
+    } else {
+        Ok(guard.label.clone())
+    }
+}
+
+#[tauri::command]
+fn set_hotkey(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<HotkeyState>>,
+    hotkey: String,
+) -> Result<String, String> {
+    let shortcut = parse_shortcut(&hotkey)?;
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+
+    if let Some(current) = guard.current.take() {
+        let _ = app.global_shortcut().unregister(current);
+    }
+
+    app.global_shortcut()
+        .register(shortcut)
+        .map_err(|e| e.to_string())?;
+
+    guard.current = Some(shortcut);
+    guard.label = hotkey.trim().to_string();
+    Ok(guard.label.clone())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
-
     tauri::Builder::default()
         .manage(Mutex::new(ServiceWindowState::default()))
+        .manage(Mutex::new(HotkeyState {
+            current: None,
+            label: default_hotkey().to_string(),
+        }))
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -69,6 +113,7 @@ pub fn run() {
                 show_active_service(app, &state);
             }
         }))
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(
@@ -89,7 +134,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .setup(move |app| {
+        .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -98,8 +143,12 @@ pub fn run() {
                 )?;
             }
 
-            if let Err(err) = app.global_shortcut().register(shortcut) {
-                eprintln!("Failed to register Alt+Space shortcut: {err}");
+            let default = parse_shortcut(default_hotkey()).expect("default hotkey parses");
+            if let Err(err) = app.global_shortcut().register(default) {
+                eprintln!("Failed to register default shortcut: {err}");
+            } else if let Ok(mut state) = app.state::<Mutex<HotkeyState>>().lock() {
+                state.current = Some(default);
+                state.label = default_hotkey().to_string();
             }
 
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -154,7 +203,10 @@ pub fn run() {
             switch_service,
             update_service_bounds,
             hide_service_windows,
-            show_active_service_window
+            show_active_service_window,
+            open_url_in_browser,
+            get_hotkey,
+            set_hotkey
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

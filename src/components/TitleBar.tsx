@@ -1,11 +1,14 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppState } from "../hooks/useAppState";
+import type { ServiceConfig } from "../hooks/useSettingsStore";
 
 interface TitleBarProps {
   onOpenSettings: () => void;
+  activeService: ServiceConfig | null;
 }
 
-export function TitleBar({ onOpenSettings }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, activeService }: TitleBarProps) {
   const { isAlwaysOnTop, toggleAlwaysOnTop } = useAppState();
   const appWindow = getCurrentWindow();
 
@@ -26,9 +29,25 @@ export function TitleBar({ onOpenSettings }: TitleBarProps) {
     >
       <div className="flex items-center px-3 gap-2" data-tauri-drag-region>
         <span className="text-sm font-medium text-gray-300">OctoDock</span>
+        {activeService ? (
+          <span className="text-xs text-gray-500" data-tauri-drag-region>
+            {activeService.name}
+          </span>
+        ) : null}
       </div>
 
       <div className="flex items-center h-full">
+        {activeService ? (
+          <button
+            onClick={() => void openUrl(activeService.url)}
+            className="h-full px-3 text-gray-400 hover:bg-gray-800 hover:text-white transition-colors text-xs"
+            title={`Open ${activeService.name} in browser`}
+            type="button"
+          >
+            ↗ Browser
+          </button>
+        ) : null}
+
         <button
           onClick={onOpenSettings}
           className="h-full px-3 text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
@@ -42,7 +61,7 @@ export function TitleBar({ onOpenSettings }: TitleBarProps) {
           onClick={() => void toggleAlwaysOnTop()}
           className={`h-full px-3 flex items-center justify-center transition-colors ${
             isAlwaysOnTop
-              ? "bg-blue-600 text-white"
+              ? "bg-teal-600 text-white"
               : "text-gray-400 hover:bg-gray-800 hover:text-white"
           }`}
           title={isAlwaysOnTop ? "Unpin from top" : "Pin to top"}

@@ -11,16 +11,22 @@ function App() {
     services,
     activeServiceId,
     activeService,
+    hotkey,
     setActiveService,
     addService,
     removeService,
     moveService,
+    updateService,
+    setHotkey,
   } = useSettingsStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <div className="h-full flex flex-col bg-gray-900 relative">
-      <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
+      <TitleBar
+        onOpenSettings={() => setSettingsOpen(true)}
+        activeService={activeService}
+      />
 
       <div className="flex-1 flex overflow-hidden">
         <Sidebar
@@ -40,14 +46,20 @@ function App() {
         )}
       </div>
 
-      <SettingsModal
-        open={settingsOpen}
-        services={services}
-        onClose={() => setSettingsOpen(false)}
-        onAdd={addService}
-        onRemove={removeService}
-        onMove={moveService}
-      />
+      {settingsOpen ? (
+        <SettingsModal
+          key={hotkey}
+          open={settingsOpen}
+          services={services}
+          hotkey={hotkey}
+          onClose={() => setSettingsOpen(false)}
+          onAdd={addService}
+          onRemove={removeService}
+          onMove={moveService}
+          onUpdateService={updateService}
+          onSetHotkey={setHotkey}
+        />
+      ) : null}
     </div>
   );
 }

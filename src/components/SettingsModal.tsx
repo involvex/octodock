@@ -1,13 +1,18 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import type { ServiceConfig } from "../hooks/useSettingsStore";
+import { DEFAULT_HOTKEY } from "../lib/settings";
 
 interface SettingsModalProps {
   open: boolean;
   services: ServiceConfig[];
+  hotkey: string;
   onClose: () => void;
   onAdd: (service: ServiceConfig) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
   onMove: (id: string, direction: -1 | 1) => Promise<void>;
+  onUpdateService: (id: string, patch: Partial<ServiceConfig>) => Promise<void>;
+  onSetHotkey: (hotkey: string) => Promise<string>;
 }
 
 function slugify(value: string): string {
@@ -21,15 +26,38 @@ function slugify(value: string): string {
 export function SettingsModal({
   open,
   services,
+  hotkey,
   onClose,
   onAdd,
   onRemove,
   onMove,
+  onUpdateService,
+  onSetHotkey,
 }: SettingsModalProps) {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [icon, setIcon] = useState("🌐");
   const [error, setError] = useState<string | null>(null);
+  const [hotkeyDraft, setHotkeyDraft] = useState(hotkey);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const [autostartEnabled, setAutostartEnabled] = useState(false);
+  const [autostartBusy, setAutostartBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const enabled = await isEnabled();
+        if (!cancelled) setAutostartEnabled(enabled);
+      } catch {
+        if (!cancelled) setAutostartEnabled(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -66,15 +94,45 @@ export function SettingsModal({
       name: trimmedName,
       icon: icon.trim() || "🌐",
       url: trimmedUrl,
+      openInBrowser: false,
     });
     setName("");
     setUrl("");
     setIcon("🌐");
   };
 
+  const handleSaveHotkey = async () => {
+    setHotkeyError(null);
+    try {
+      const applied = await onSetHotkey(hotkeyDraft);
+      setHotkeyDraft(applied);
+    } catch (err) {
+      setHotkeyError(
+        err instanceof Error ? err.message : "Failed to register hotkey",
+      );
+    }
+  };
+
+  const handleToggleAutostart = async () => {
+    setAutostartBusy(true);
+    try {
+      if (autostartEnabled) {
+        await disable();
+        setAutostartEnabled(false);
+      } else {
+        await enable();
+        setAutostartEnabled(true);
+      }
+    } catch {
+      // Keep previous state on failure.
+    } finally {
+      setAutostartBusy(false);
+    }
+  };
+
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="w-[480px] max-w-[90vw] max-h-[80vh] overflow-auto rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
+      <div className="w-[520px] max-w-[90vw] max-h-[80vh] overflow-auto rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
           <h2 className="text-sm font-semibold text-white">Settings</h2>
           <button
@@ -86,7 +144,50 @@ export function SettingsModal({
           </button>
         </div>
 
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-5">
+          <section className="space-y-2">
+            <h3 className="text-xs uppercase tracking-wide text-gray-500">
+              General
+            </h3>
+            <label className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-950 px-3 py-2">
+              <span className="text-sm text-white">Launch on startup</span>
+              <input
+                type="checkbox"
+                checked={autostartEnabled}
+                disabled={autostartBusy}
+                onChange={() => void handleToggleAutostart()}
+              />
+            </label>
+            <div className="rounded-lg border border-gray-800 bg-gray-950 px-3 py-2 space-y-2">
+              <label className="block text-sm text-white" htmlFor="hotkey">
+                Global hotkey
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="hotkey"
+                  value={hotkeyDraft}
+                  onChange={(e) => setHotkeyDraft(e.target.value)}
+                  placeholder={DEFAULT_HOTKEY}
+                  className="flex-1 rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleSaveHotkey()}
+                  className="rounded-md bg-teal-600 px-3 py-2 text-sm font-medium text-white hover:bg-teal-500"
+                >
+                  Save
+                </button>
+              </div>
+              {hotkeyError ? (
+                <p className="text-xs text-red-400">{hotkeyError}</p>
+              ) : (
+                <p className="text-xs text-gray-500">
+                  Example: Alt+Space or Ctrl+Shift+O
+                </p>
+              )}
+            </div>
+          </section>
+
           <section>
             <h3 className="text-xs uppercase tracking-wide text-gray-500 mb-2">
               Services
@@ -95,43 +196,57 @@ export function SettingsModal({
               {services.map((service, index) => (
                 <div
                   key={service.id}
-                  className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-950 px-3 py-2"
+                  className="rounded-lg border border-gray-800 bg-gray-950 px-3 py-2 space-y-2"
                 >
-                  <span className="text-lg">{service.icon}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm text-white truncate">
-                      {service.name}
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">{service.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white truncate">
+                        {service.name}
+                      </div>
+                      <div className="text-xs text-gray-500 truncate">
+                        {service.url}
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-500 truncate">
-                      {service.url}
-                    </div>
+                    <button
+                      type="button"
+                      className="px-2 text-gray-400 hover:text-white disabled:opacity-30"
+                      disabled={index === 0}
+                      onClick={() => void onMove(service.id, -1)}
+                      title="Move up"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className="px-2 text-gray-400 hover:text-white disabled:opacity-30"
+                      disabled={index === services.length - 1}
+                      onClick={() => void onMove(service.id, 1)}
+                      title="Move down"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      className="px-2 text-red-400 hover:text-red-300"
+                      onClick={() => void onRemove(service.id)}
+                      title="Remove"
+                    >
+                      ⌫
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="px-2 text-gray-400 hover:text-white disabled:opacity-30"
-                    disabled={index === 0}
-                    onClick={() => void onMove(service.id, -1)}
-                    title="Move up"
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="px-2 text-gray-400 hover:text-white disabled:opacity-30"
-                    disabled={index === services.length - 1}
-                    onClick={() => void onMove(service.id, 1)}
-                    title="Move down"
-                  >
-                    ↓
-                  </button>
-                  <button
-                    type="button"
-                    className="px-2 text-red-400 hover:text-red-300"
-                    onClick={() => void onRemove(service.id)}
-                    title="Remove"
-                  >
-                    ⌫
-                  </button>
+                  <label className="flex items-center gap-2 text-xs text-gray-400">
+                    <input
+                      type="checkbox"
+                      checked={service.openInBrowser === true}
+                      onChange={(e) =>
+                        void onUpdateService(service.id, {
+                          openInBrowser: e.target.checked,
+                        })
+                      }
+                    />
+                    Open in browser (recommended for Google sign-in)
+                  </label>
                 </div>
               ))}
             </div>
@@ -165,15 +280,14 @@ export function SettingsModal({
             <button
               type="button"
               onClick={() => void handleAdd()}
-              className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"
+              className="rounded-md bg-teal-600 px-3 py-2 text-sm font-medium text-white hover:bg-teal-500"
             >
               Add service
             </button>
           </section>
 
           <p className="text-xs text-gray-500">
-            Tip: Alt+Space toggles OctoDock. Close hides to tray; Quit from the
-            tray menu exits fully.
+            Close hides to tray; Quit from the tray menu exits fully.
           </p>
         </div>
       </div>
