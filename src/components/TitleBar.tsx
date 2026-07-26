@@ -1,0 +1,131 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useAppState } from "../hooks/useAppState";
+
+interface TitleBarProps {
+  onOpenSettings: () => void;
+}
+
+export function TitleBar({ onOpenSettings }: TitleBarProps) {
+  const { isAlwaysOnTop, toggleAlwaysOnTop } = useAppState();
+  const appWindow = getCurrentWindow();
+
+  const handleMinimize = () => {
+    void appWindow.minimize();
+  };
+  const handleMaximize = () => {
+    void appWindow.toggleMaximize();
+  };
+  const handleClose = () => {
+    void appWindow.hide();
+  };
+
+  return (
+    <div
+      data-tauri-drag-region
+      className="h-8 bg-gray-900 flex items-center justify-between border-b border-gray-800 select-none"
+    >
+      <div className="flex items-center px-3 gap-2" data-tauri-drag-region>
+        <span className="text-sm font-medium text-gray-300">OctoDock</span>
+      </div>
+
+      <div className="flex items-center h-full">
+        <button
+          onClick={onOpenSettings}
+          className="h-full px-3 text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
+          title="Settings"
+          type="button"
+        >
+          ⚙️
+        </button>
+
+        <button
+          onClick={() => void toggleAlwaysOnTop()}
+          className={`h-full px-3 flex items-center justify-center transition-colors ${
+            isAlwaysOnTop
+              ? "bg-blue-600 text-white"
+              : "text-gray-400 hover:bg-gray-800 hover:text-white"
+          }`}
+          title={isAlwaysOnTop ? "Unpin from top" : "Pin to top"}
+          type="button"
+        >
+          <svg
+            className="w-4 h-4"
+            fill={isAlwaysOnTop ? "currentColor" : "none"}
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
+            />
+          </svg>
+        </button>
+
+        <button
+          onClick={handleMinimize}
+          className="h-full px-3 text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
+          title="Minimize"
+          type="button"
+        >
+          <svg
+            className="w-4 h-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M20 12H4"
+            />
+          </svg>
+        </button>
+
+        <button
+          onClick={handleMaximize}
+          className="h-full px-3 text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
+          title="Maximize"
+          type="button"
+        >
+          <svg
+            className="w-4 h-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"
+            />
+          </svg>
+        </button>
+
+        <button
+          onClick={handleClose}
+          className="h-full px-3 text-gray-400 hover:bg-red-600 hover:text-white transition-colors"
+          title="Close to tray"
+          type="button"
+        >
+          <svg
+            className="w-4 h-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
