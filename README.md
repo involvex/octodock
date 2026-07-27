@@ -40,6 +40,13 @@ bun run tauri dev
 After launch the window starts hidden — use the tray icon or the configured
 hotkey to show it.
 
+For verbose **app** logs (not build noise from `tauri -v`), set:
+
+```bash
+# PowerShell
+$env:RUST_LOG="debug"; bun run tauri dev
+```
+
 ## Test & lint
 
 ```bash

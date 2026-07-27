@@ -261,7 +261,9 @@ Settings are stored via `@tauri-apps/plugin-store` in a `settings.json` file. Ke
 
 | Problem | Solution |
 |---|---|
-| `Alt+Space` doesn't work | Another app may have registered it. Check `tauri-plugin-global-shortcut` logs or pick an alternative combo. |
+| `Alt+Space` doesn't work | Another app (e.g. PowerToys Run) may own that combo. Change the hotkey in Settings. Boot failures are logged as `warn` and toasted once the UI loads. |
+| No useful app logs with `-v` | `tauri`/`cargo -v` only raises **build** verbosity. For runtime logs use `RUST_LOG=debug bun run tauri dev` (or `OCTODOCK_LOG=debug`). Debug builds default to `Debug` level. |
+| German linker note about `.dll.lib` / `.dll.exp` | Harmless MSVC message from `crate-type` including `cdylib` in `Cargo.toml`. Not a failed link. |
 | Service webview not visible | Check that `switch_service` was called with valid bounds. The bounds must have `width >= 1` and `height >= 1`. |
 | External link opens in webview | The URL isn't matched by `host_allowed()` in `service_window.rs`. Add the domain family. |
 | Cargo build is slow | Ensure `[profile.dev]` has `debug = 0` and `incremental = false`. Clean `target/` if needed. |

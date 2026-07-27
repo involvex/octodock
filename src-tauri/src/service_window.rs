@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, State, Webview, WebviewBuilder, WebviewUrl,
+    WebviewWindow,
 };
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
@@ -20,7 +21,14 @@ pub struct WindowBounds {
 #[derive(Default)]
 pub struct ServiceWindowState {
     pub active_id: Option<String>,
-    pub webviews: HashMap<String, String>,
+    /// Maps service_id → child `Webview` handle. We store the handles directly
+    /// instead of labels because `app.get_webview(label)` can't find child
+    /// webviews created via `Window::add_child()` — they're registered in
+    /// wry's internal map but not in Tauri's `AppHandle` lookup.
+    pub webviews: HashMap<String, Webview>,
+    /// Service IDs currently being created. Prevents concurrent `add_child`
+    /// races from leaving a webview that exists in wry but not in our map.
+    pub pending: HashSet<String>,
 }
 
 impl ServiceWindowState {
@@ -90,13 +98,13 @@ fn apply_bounds(webview: &Webview, bounds: &WindowBounds) {
         bounds.x.round() as i32,
         bounds.y.round() as i32,
     )) {
-        eprintln!("Failed to position service webview: {e}");
+        log::warn!("Failed to position service webview: {e}");
     }
     if let Err(e) = webview.set_size(PhysicalSize::new(
         bounds.width.round() as u32,
         bounds.height.round() as u32,
     )) {
-        eprintln!("Failed to size service webview: {e}");
+        log::warn!("Failed to size service webview: {e}");
     }
 }
 
@@ -104,25 +112,37 @@ fn open_external(app: &AppHandle, url: &Url) {
     let _ = app.opener().open_url(url.as_str(), None::<&str>);
 }
 
-pub fn hide_all_service_windows(app: &AppHandle, state: &Mutex<ServiceWindowState>) {
+/// Parent window for child service webviews. Prefer the invoking window
+/// (injected by Tauri from the frontend IPC caller), then fall back to label
+/// lookup — `get_webview_window("main")` can miss from async workers.
+fn parent_window(app: &AppHandle, caller: &WebviewWindow) -> tauri::Window {
+    let from_caller = <WebviewWindow as AsRef<Webview>>::as_ref(caller).window();
+    if from_caller.label() == "main" {
+        return from_caller;
+    }
+    if let Some(w) = app.get_window("main") {
+        return w;
+    }
+    if let Some(ww) = app.get_webview_window("main") {
+        return <WebviewWindow as AsRef<Webview>>::as_ref(&ww).window();
+    }
+    from_caller
+}
+
+pub fn hide_all_service_windows(_app: &AppHandle, state: &Mutex<ServiceWindowState>) {
     if let Ok(guard) = state.lock() {
-        for label in guard.webviews.values() {
-            if let Some(webview) = app.get_webview(label) {
-                let _ = webview.hide();
-            }
+        for webview in guard.webviews.values() {
+            let _ = webview.hide();
         }
     }
 }
 
-pub fn show_active_service(app: &AppHandle, state: &Mutex<ServiceWindowState>) {
+pub fn show_active_service(_app: &AppHandle, state: &Mutex<ServiceWindowState>) {
     if let Ok(guard) = state.lock() {
         let Some(active_id) = guard.active_id.as_ref() else {
             return;
         };
-        let Some(label) = guard.webviews.get(active_id) else {
-            return;
-        };
-        if let Some(webview) = app.get_webview(label) {
+        if let Some(webview) = guard.webviews.get(active_id) {
             let _ = webview.show();
         }
     }
@@ -137,6 +157,7 @@ pub fn show_active_service(app: &AppHandle, state: &Mutex<ServiceWindowState>) {
 // https://github.com/tauri-apps/wry/issues/583
 #[tauri::command]
 pub async fn switch_service(
+    window: WebviewWindow,
     app: AppHandle,
     state: State<'_, Mutex<ServiceWindowState>>,
     service_id: String,
@@ -146,26 +167,36 @@ pub async fn switch_service(
     let base_url = Url::parse(&url).map_err(|e| e.to_string())?;
     let label = ServiceWindowState::label_for(&service_id);
 
+    log::debug!(
+        "switch_service → {service_id} ({url}) from window '{}'",
+        window.label()
+    );
+
+    // Phase 1: Hide all existing webviews and check if we already have this one.
+    // We store `Webview` handles directly (not labels) because
+    // `app.get_webview(label)` can't find child webviews created via
+    // `Window::add_child()`.
     {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
-        for existing_label in guard.webviews.values() {
-            if let Some(webview) = app.get_webview(existing_label) {
-                let _ = webview.hide();
-            }
+        for webview in guard.webviews.values() {
+            let _ = webview.hide();
         }
         guard.active_id = Some(service_id.clone());
-        guard.webviews.insert(service_id.clone(), label.clone());
+
+        if let Some(existing) = guard.webviews.get(&service_id) {
+            apply_bounds(existing, &bounds);
+            existing.show().map_err(|e| e.to_string())?;
+            log::debug!("Showing existing service webview '{service_id}'");
+            return Ok(());
+        }
+
+        if !guard.pending.insert(service_id.clone()) {
+            // Another call is already creating this webview. Ask the frontend
+            // to retry shortly instead of blocking a tokio worker with sleep.
+            return Err(format!("service webview '{service_id}' is creating"));
+        }
     }
 
-    if let Some(existing) = app.get_webview(&label) {
-        apply_bounds(&existing, &bounds);
-        existing.show().map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    let Some(main) = app.get_webview_window("main") else {
-        return Err("main window not found".into());
-    };
     // Services are embedded as *child webviews* of the main window rather
     // than separate owned `WebviewWindow`s. Owned windows are always drawn
     // above their owner in the OS z-order and live entirely outside the
@@ -175,7 +206,7 @@ pub async fn switch_service(
     // exactly the "opens in a bigger window on top, can't close it" failure
     // mode this replaces. A child webview can never escape its parent
     // window's bounds or z-order by construction.
-    let main_window = <tauri::WebviewWindow as AsRef<Webview>>::as_ref(&main).window();
+    let main_window = parent_window(&app, &window);
 
     let app_for_nav = app.clone();
     let base_for_nav = base_url.clone();
@@ -201,16 +232,44 @@ pub async fn switch_service(
         bounds.height.round().max(1.0) as u32,
     );
 
-    let webview = main_window
-        .add_child(builder, position, size)
-        .map_err(|e| e.to_string())?;
-    webview.show().map_err(|e| e.to_string())?;
+    let webview = match main_window.add_child(builder, position, size) {
+        Ok(w) => w,
+        Err(e) => {
+            let msg = e.to_string();
+            log::warn!("add_child failed for '{service_id}': {msg}");
+            if let Ok(mut guard) = state.lock() {
+                guard.pending.remove(&service_id);
+                if msg.contains("already exists") {
+                    if let Some(existing) = guard.webviews.get(&service_id) {
+                        apply_bounds(existing, &bounds);
+                        let _ = existing.show();
+                        return Ok(());
+                    }
+                }
+            }
+            return Err(msg);
+        }
+    };
+    webview.show().map_err(|e| {
+        if let Ok(mut guard) = state.lock() {
+            guard.pending.remove(&service_id);
+        }
+        e.to_string()
+    })?;
+
+    {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        guard.pending.remove(&service_id);
+        guard.webviews.insert(service_id.clone(), webview);
+    }
+
+    log::info!("Created service webview '{service_id}'");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn update_service_bounds(
-    app: AppHandle,
+    _app: AppHandle,
     state: State<'_, Mutex<ServiceWindowState>>,
     bounds: WindowBounds,
 ) -> Result<(), String> {
@@ -218,11 +277,8 @@ pub async fn update_service_bounds(
     let Some(active_id) = guard.active_id.as_ref() else {
         return Ok(());
     };
-    let Some(label) = guard.webviews.get(active_id) else {
-        return Ok(());
-    };
-    if let Some(webview) = app.get_webview(label) {
-        apply_bounds(&webview, &bounds);
+    if let Some(webview) = guard.webviews.get(active_id) {
+        apply_bounds(webview, &bounds);
         // Re-showing here is a no-op in the common resize/move case, but it
         // also covers restoring from a minimized main window, where the
         // service webview was hidden and needs to reappear once bounds are

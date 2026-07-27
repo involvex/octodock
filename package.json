@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "prebuild": "bun run lint && bun run format && bun run typecheck",
+    "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "eslint .",

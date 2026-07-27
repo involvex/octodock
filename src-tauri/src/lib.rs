@@ -21,6 +21,29 @@ struct HotkeyState {
     label: String,
 }
 
+fn log_level_from_env() -> log::LevelFilter {
+    let raw = std::env::var("OCTODOCK_LOG")
+        .or_else(|_| std::env::var("RUST_LOG"))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if raw.contains("trace") {
+        log::LevelFilter::Trace
+    } else if raw.contains("debug") {
+        log::LevelFilter::Debug
+    } else if raw.contains("warn") {
+        log::LevelFilter::Warn
+    } else if raw.contains("error") {
+        log::LevelFilter::Error
+    } else if raw.contains("info") {
+        log::LevelFilter::Info
+    } else if cfg!(debug_assertions) {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    }
+}
+
 // Service webviews (Gmail, Keep, etc.) are only ever created once the main
 // window is actually shown to the user. Emitting this lets the frontend defer
 // the (potentially slow, sometimes Google-anti-automation-blocked) WebView2
@@ -33,6 +56,7 @@ fn show_main_window(app: &tauri::AppHandle) {
         let _ = window.emit("main-window-shown", ());
         let state = app.state::<Mutex<ServiceWindowState>>();
         show_active_service(app, &state);
+        log::debug!("Main window shown");
     }
 }
 
@@ -40,6 +64,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 fn toggle_window_visibility(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(false);
+        log::debug!("toggle_window_visibility (was_visible={visible})");
         if visible {
             let state = app.state::<Mutex<ServiceWindowState>>();
             let _ = window.hide();
@@ -96,18 +121,32 @@ fn set_hotkey(
 ) -> Result<String, String> {
     let shortcut = parse_shortcut(&hotkey)?;
     let mut guard = state.lock().map_err(|e| e.to_string())?;
+    let label = hotkey.trim().to_string();
 
-    if let Some(current) = guard.current.take() {
-        let _ = app.global_shortcut().unregister(current);
+    // Same combo already registered — just refresh the label.
+    if guard.current.as_ref() == Some(&shortcut) {
+        guard.label = label.clone();
+        log::debug!("Hotkey already registered: {label}");
+        return Ok(label);
     }
 
-    app.global_shortcut()
-        .register(shortcut)
-        .map_err(|e| e.to_string())?;
+    // Register the new shortcut *before* dropping the old one so a conflict
+    // never leaves the app with zero hotkey.
+    if let Err(err) = app.global_shortcut().register(shortcut) {
+        log::warn!("Failed to register hotkey '{label}': {err}");
+        return Err(err.to_string());
+    }
+
+    if let Some(previous) = guard.current.take() {
+        if let Err(err) = app.global_shortcut().unregister(previous) {
+            log::warn!("Failed to unregister previous hotkey: {err}");
+        }
+    }
 
     guard.current = Some(shortcut);
-    guard.label = hotkey.trim().to_string();
-    Ok(guard.label.clone())
+    guard.label = label.clone();
+    log::info!("Registered hotkey: {label}");
+    Ok(label)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -148,20 +187,40 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+            let level = log_level_from_env();
+            let install_log_plugin = cfg!(debug_assertions)
+                || std::env::var_os("OCTODOCK_LOG").is_some()
+                || std::env::var_os("RUST_LOG").is_some();
+            if install_log_plugin {
+                app.handle()
+                    .plugin(tauri_plugin_log::Builder::default().level(level).build())?;
+                log::info!("Log plugin ready (level={level})");
             }
 
+            // Try to register a sensible default hotkey so the app is usable
+            // immediately, even before React loads and calls `set_hotkey` with
+            // the saved value. If another app already owns this combo we log
+            // and move on — the frontend will toast and let the user pick
+            // another combo in Settings.
             let default = parse_shortcut(default_hotkey()).expect("default hotkey parses");
-            if let Err(err) = app.global_shortcut().register(default) {
-                eprintln!("Failed to register default shortcut: {err}");
-            } else if let Ok(mut state) = app.state::<Mutex<HotkeyState>>().lock() {
-                state.current = Some(default);
-                state.label = default_hotkey().to_string();
+            match app.global_shortcut().register(default) {
+                Ok(()) => {
+                    if let Ok(mut state) = app.state::<Mutex<HotkeyState>>().lock() {
+                        state.current = Some(default);
+                        state.label = default_hotkey().to_string();
+                    }
+                    log::info!("Registered default hotkey: {}", default_hotkey());
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Failed to register default hotkey '{}': {err}",
+                        default_hotkey()
+                    );
+                    eprintln!(
+                        "Failed to register default hotkey '{}': {err}",
+                        default_hotkey()
+                    );
+                }
             }
 
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

@@ -94,25 +94,56 @@ export function ServiceContentArea({
     // shown, either because it already is (rare) or via the "shown" event
     // the backend emits from the tray/hotkey/single-instance show paths.
     let created = false;
+    let inFlight = false;
     let pollId = 0;
+    let pollAttempts = 0;
+    const MAX_POLL_ATTEMPTS = 60;
+
     const createWhenShown = async () => {
-      if (created || cancelled) return;
-      if (!(await getCurrentWindow().isVisible())) return;
-      if (await getCurrentWindow().isMinimized()) return;
-      // Only latch `created` once we have real bounds to create the webview
-      // with. The container can still report a zero-size rect for a frame
-      // or two right as the main window becomes visible; bailing out here
-      // without setting `created` lets the next poll/resize/move event
-      // retry instead of leaving the service permanently un-created.
-      const bounds = await measureBounds(el);
-      if (!bounds || cancelled) return;
-      created = true;
-      window.clearInterval(pollId);
-      await invoke("switch_service", {
-        serviceId: service.id,
-        url: service.url,
-        bounds,
-      });
+      // Latch inFlight before any await so poll/resize/shown cannot stack
+      // concurrent switch_service calls.
+      if (created || cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        if (!(await getCurrentWindow().isVisible())) return;
+        if (await getCurrentWindow().isMinimized()) return;
+        // Only latch `created` once we have real bounds to create the webview
+        // with. The container can still report a zero-size rect for a frame
+        // or two right as the main window becomes visible; bailing out here
+        // without setting `created` lets the next poll/resize/move event
+        // retry instead of leaving the service permanently un-created.
+        const bounds = await measureBounds(el);
+        if (!bounds || cancelled) return;
+        try {
+          await invoke("switch_service", {
+            serviceId: service.id,
+            url: service.url,
+            bounds,
+          });
+          if (cancelled) return;
+          created = true;
+          window.clearInterval(pollId);
+        } catch (e) {
+          const msg =
+            typeof e === "string"
+              ? e
+              : e instanceof Error
+                ? e.message
+                : String(e);
+          if (msg.includes("already exists") || msg.includes("is creating")) {
+            // Creation race — show whatever won, or let the next poll retry.
+            if (msg.includes("already exists")) {
+              void invoke("show_active_service_window");
+              created = true;
+              window.clearInterval(pollId);
+            }
+            return;
+          }
+          console.error("switch_service failed:", msg);
+        }
+      } finally {
+        inFlight = false;
+      }
     };
 
     void createWhenShown();
@@ -126,7 +157,14 @@ export function ServiceContentArea({
     // very first launch): poll briefly until the webview is created so a
     // missed event can never leave the app permanently stuck with no
     // visible service content.
-    pollId = window.setInterval(() => void createWhenShown(), 400);
+    pollId = window.setInterval(() => {
+      pollAttempts += 1;
+      if (pollAttempts > MAX_POLL_ATTEMPTS) {
+        window.clearInterval(pollId);
+        return;
+      }
+      void createWhenShown();
+    }, 400);
 
     const observer = new ResizeObserver(() => {
       if (created) void sync(false);
