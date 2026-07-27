@@ -11,7 +11,7 @@ use service_window::{
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -21,18 +21,31 @@ struct HotkeyState {
     label: String,
 }
 
+// Service webviews (Gmail, Keep, etc.) are only ever created once the main
+// window is actually shown to the user. Emitting this lets the frontend defer
+// the (potentially slow, sometimes Google-anti-automation-blocked) WebView2
+// creation instead of eagerly spinning one up the instant the app boots
+// hidden into the tray.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("main-window-shown", ());
+        let state = app.state::<Mutex<ServiceWindowState>>();
+        show_active_service(app, &state);
+    }
+}
+
 #[tauri::command]
 fn toggle_window_visibility(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(false);
-        let state = app.state::<Mutex<ServiceWindowState>>();
         if visible {
+            let state = app.state::<Mutex<ServiceWindowState>>();
             let _ = window.hide();
             hide_all_service_windows(&app, &state);
         } else {
-            let _ = window.show();
-            let _ = window.set_focus();
-            show_active_service(&app, &state);
+            show_main_window(&app);
         }
     }
 }
@@ -106,12 +119,7 @@ pub fn run() {
             label: default_hotkey().to_string(),
         }))
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-                let state = app.state::<Mutex<ServiceWindowState>>();
-                show_active_service(app, &state);
-            }
+            show_main_window(app);
         }))
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init());

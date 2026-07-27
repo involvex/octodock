@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ServiceConfig } from "../hooks/useSettingsStore";
@@ -26,22 +27,17 @@ async function measureBounds(
     return null;
   }
 
-  const window = getCurrentWindow();
-  const factor = await window.scaleFactor();
-  // innerPosition (client-area origin), not outerPosition (outer frame) —
-  // getBoundingClientRect() is relative to the client area. Undecorated
-  // resizable windows on Windows still carry an invisible resize-hit-test
-  // border that shifts outerPosition away from the real content origin, most
-  // dramatically when maximized (outerPosition can report large negative
-  // values like (-8,-8) while content still starts at the true work-area
-  // edge). Using outerPosition here silently drags the embedded service
-  // webview up/left of where it belongs, which can bleed into the custom
-  // titlebar and swallow clicks meant for the close/minimize buttons.
-  const position = await window.innerPosition();
+  // Services are embedded as child webviews of the main window (see
+  // `switch_service` in service_window.rs), so their bounds are relative to
+  // the *parent window's client area*, not the desktop. That means no
+  // `innerPosition()`/desktop-origin math is needed here at all — unlike a
+  // separate top-level window, a child webview can't end up positioned
+  // relative to the wrong monitor or drift from the main window's frame.
+  const factor = await getCurrentWindow().scaleFactor();
 
   return {
-    x: position.x + rect.left * factor,
-    y: position.y + rect.top * factor,
+    x: rect.left * factor,
+    y: rect.top * factor,
     width: rect.width * factor,
     height: rect.height * factor,
   };
@@ -89,25 +85,70 @@ export function ServiceContentArea({
       }
     };
 
-    void sync(true);
+    // The main window starts hidden in the tray, and React mounts (and
+    // restores the last-active service) well before the user ever shows it.
+    // Creating the service's native WebviewWindow immediately would spin up
+    // a second full WebView2 instance in the background on every launch —
+    // slow, resource-heavy, and pointless if the user never opens the dock.
+    // Defer the first switch_service call until the main window is actually
+    // shown, either because it already is (rare) or via the "shown" event
+    // the backend emits from the tray/hotkey/single-instance show paths.
+    let created = false;
+    let pollId = 0;
+    const createWhenShown = async () => {
+      if (created || cancelled) return;
+      if (!(await getCurrentWindow().isVisible())) return;
+      if (await getCurrentWindow().isMinimized()) return;
+      // Only latch `created` once we have real bounds to create the webview
+      // with. The container can still report a zero-size rect for a frame
+      // or two right as the main window becomes visible; bailing out here
+      // without setting `created` lets the next poll/resize/move event
+      // retry instead of leaving the service permanently un-created.
+      const bounds = await measureBounds(el);
+      if (!bounds || cancelled) return;
+      created = true;
+      window.clearInterval(pollId);
+      await invoke("switch_service", {
+        serviceId: service.id,
+        url: service.url,
+        bounds,
+      });
+    };
+
+    void createWhenShown();
+
+    const unlistenShownPromise = listen("main-window-shown", () => {
+      void createWhenShown();
+    });
+
+    // Defense-in-depth against the "shown" event firing before this
+    // listener finishes its async IPC registration (a real race on the
+    // very first launch): poll briefly until the webview is created so a
+    // missed event can never leave the app permanently stuck with no
+    // visible service content.
+    pollId = window.setInterval(() => void createWhenShown(), 400);
 
     const observer = new ResizeObserver(() => {
-      void sync(false);
+      if (created) void sync(false);
+      else void createWhenShown();
     });
     observer.observe(el);
 
     const unlistenPromise = Promise.all([
       getCurrentWindow().onResized(() => {
-        void sync(false);
+        if (created) void sync(false);
+        else void createWhenShown();
       }),
       getCurrentWindow().onMoved(() => {
-        void sync(false);
+        if (created) void sync(false);
       }),
     ]);
 
     return () => {
       cancelled = true;
+      window.clearInterval(pollId);
       observer.disconnect();
+      void unlistenShownPromise.then((unlisten) => unlisten());
       void unlistenPromise.then((unlistens) => {
         for (const unlisten of unlistens) {
           unlisten();

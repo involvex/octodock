@@ -4,6 +4,7 @@ import { load, type Store } from "@tauri-apps/plugin-store";
 import {
   DEFAULT_HOTKEY,
   DEFAULT_SERVICES,
+  GOOGLE_EMBED_BLOCKED_IDS,
   isLikelyHotkey,
   normalizeHotkey,
   type ServiceConfig,
@@ -13,19 +14,38 @@ import { toast } from "../lib/toast";
 export type { ServiceConfig };
 export { DEFAULT_SERVICES, DEFAULT_HOTKEY };
 
+// Bumped whenever a one-time migration below needs to run against
+// already-persisted settings.json files. Each migration is applied at most
+// once per store (gated by comparing against the last-applied version), so
+// re-toggling "Try embedding anyway" afterwards is never overwritten again.
+const SETTINGS_VERSION = 2;
+
 async function getStore(): Promise<Store> {
   const store = await load("settings.json", { autoSave: true });
+  const version = (await store.get<number>("settingsVersion")) ?? 1;
   const existing = await store.get<ServiceConfig[]>("services");
   if (!existing || existing.length === 0) {
     await store.set("services", DEFAULT_SERVICES);
   } else {
-    // Ensure Gmail keeps browser fallback if older stores lack the flag.
-    const migrated = existing.map((service) =>
-      service.id === "gmail" && service.openInBrowser === undefined
-        ? { ...service, openInBrowser: true }
-        : service,
-    );
+    const migrated = existing.map((service) => {
+      // v2: Keep and Calendar (like Gmail before it) are blocked by Google
+      // when embedded. Earlier defaults shipped them with
+      // `openInBrowser: false`, so pre-v2 stores need a one-time flip to
+      // the browser fallback regardless of whether the flag was explicitly
+      // `false` or simply missing.
+      if (
+        version < 2 &&
+        GOOGLE_EMBED_BLOCKED_IDS.has(service.id) &&
+        service.openInBrowser !== true
+      ) {
+        return { ...service, openInBrowser: true };
+      }
+      return service;
+    });
     await store.set("services", migrated);
+  }
+  if (version < SETTINGS_VERSION) {
+    await store.set("settingsVersion", SETTINGS_VERSION);
   }
   if (!(await store.get("lastActiveService"))) {
     await store.set("lastActiveService", DEFAULT_SERVICES[0]?.id ?? "gmail");

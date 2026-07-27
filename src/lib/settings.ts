@@ -9,6 +9,13 @@ export interface ServiceConfig {
 
 export const DEFAULT_HOTKEY = "Alt+Space";
 
+// Google actively blocks sign-in inside embedded/automated webviews for
+// *any* accounts.google.com-gated property, not just Gmail — Keep and
+// Calendar hit the exact same "This browser or app may not be secure"
+// wall. All three default to the browser fallback; only Reddit (no such
+// block) defaults to embedding.
+export const GOOGLE_EMBED_BLOCKED_IDS = new Set(["gmail", "keep", "calendar"]);
+
 export const DEFAULT_SERVICES: ServiceConfig[] = [
   {
     id: "gmail",
@@ -22,7 +29,7 @@ export const DEFAULT_SERVICES: ServiceConfig[] = [
     name: "Keep",
     icon: "📝",
     url: "https://keep.google.com",
-    openInBrowser: false,
+    openInBrowser: true,
   },
   {
     id: "reddit",
@@ -36,7 +43,7 @@ export const DEFAULT_SERVICES: ServiceConfig[] = [
     name: "Calendar",
     icon: "📅",
     url: "https://calendar.google.com",
-    openInBrowser: false,
+    openInBrowser: true,
   },
 ];
 

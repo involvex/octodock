@@ -19,7 +19,13 @@ tauri-build = { version = "2", features = [] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2", features = ["tray-icon"] }
+# "unstable" enables Window::add_child / WebviewBuilder — required for
+# embedding services as child webviews *inside* the main window instead of
+# as separate owned top-level windows. Owned windows are always drawn above
+# their owner by the OS and can end up mis-sized/mis-positioned as a
+# seemingly-detached floating window; child webviews are clipped to and move
+# with their parent window by construction, so that failure mode can't occur.
+tauri = { version = "2", features = ["tray-icon", "unstable"] }
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-store = "2"

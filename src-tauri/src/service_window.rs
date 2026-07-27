@@ -3,8 +3,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, State, Webview, WebviewBuilder, WebviewUrl,
 };
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
@@ -21,7 +20,7 @@ pub struct WindowBounds {
 #[derive(Default)]
 pub struct ServiceWindowState {
     pub active_id: Option<String>,
-    pub windows: HashMap<String, String>,
+    pub webviews: HashMap<String, String>,
 }
 
 impl ServiceWindowState {
@@ -70,26 +69,35 @@ pub fn host_allowed(nav_url: &Url, base_url: &Url) -> bool {
     false
 }
 
-fn apply_bounds(window: &WebviewWindow, bounds: &WindowBounds) -> Result<(), String> {
+// Positioning failures must never prevent the webview from being shown —
+// an embedded service that's merely mis-sized/mis-positioned is recoverable
+// on the next resize/move event, but one that's silently left invisible
+// forever (because an earlier `?` bailed out before reaching `.show()`)
+// looks indistinguishable from a fully broken app.
+//
+// `bounds` here are relative to the *parent window's* client area, not the
+// desktop — these are child webviews (see `switch_service`), not separate
+// top-level windows, so there's no desktop-position/DPI translation to get
+// wrong in the first place.
+fn apply_bounds(webview: &Webview, bounds: &WindowBounds) {
     if bounds.width < 1.0 || bounds.height < 1.0 {
-        return Ok(());
+        return;
     }
 
     // Round rather than truncate — fractional DPI scale factors (e.g. 1.25x,
     // 1.5x on Windows) otherwise leave a stray 1px gap/overlap at the edges.
-    window
-        .set_position(PhysicalPosition::new(
-            bounds.x.round() as i32,
-            bounds.y.round() as i32,
-        ))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_size(PhysicalSize::new(
-            bounds.width.round() as u32,
-            bounds.height.round() as u32,
-        ))
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    if let Err(e) = webview.set_position(PhysicalPosition::new(
+        bounds.x.round() as i32,
+        bounds.y.round() as i32,
+    )) {
+        eprintln!("Failed to position service webview: {e}");
+    }
+    if let Err(e) = webview.set_size(PhysicalSize::new(
+        bounds.width.round() as u32,
+        bounds.height.round() as u32,
+    )) {
+        eprintln!("Failed to size service webview: {e}");
+    }
 }
 
 fn open_external(app: &AppHandle, url: &Url) {
@@ -98,9 +106,9 @@ fn open_external(app: &AppHandle, url: &Url) {
 
 pub fn hide_all_service_windows(app: &AppHandle, state: &Mutex<ServiceWindowState>) {
     if let Ok(guard) = state.lock() {
-        for label in guard.windows.values() {
-            if let Some(window) = app.get_webview_window(label) {
-                let _ = window.hide();
+        for label in guard.webviews.values() {
+            if let Some(webview) = app.get_webview(label) {
+                let _ = webview.hide();
             }
         }
     }
@@ -111,17 +119,24 @@ pub fn show_active_service(app: &AppHandle, state: &Mutex<ServiceWindowState>) {
         let Some(active_id) = guard.active_id.as_ref() else {
             return;
         };
-        let Some(label) = guard.windows.get(active_id) else {
+        let Some(label) = guard.webviews.get(active_id) else {
             return;
         };
-        if let Some(window) = app.get_webview_window(label) {
-            let _ = window.show();
+        if let Some(webview) = app.get_webview(label) {
+            let _ = webview.show();
         }
     }
 }
 
+// `async fn` here is load-bearing, not stylistic: creating a webview
+// deadlocks on Windows when called from a synchronous command — Tauri's IPC
+// dispatch for sync commands runs inline in a way that can block the very
+// main-thread message pump that WebView2 needs to finish creating the child
+// webview. Marking the command `async` makes Tauri dispatch it through the
+// async runtime instead, which sidesteps the deadlock. See:
+// https://github.com/tauri-apps/wry/issues/583
 #[tauri::command]
-pub fn switch_service(
+pub async fn switch_service(
     app: AppHandle,
     state: State<'_, Mutex<ServiceWindowState>>,
     service_id: String,
@@ -133,17 +148,17 @@ pub fn switch_service(
 
     {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
-        for existing_label in guard.windows.values() {
-            if let Some(window) = app.get_webview_window(existing_label) {
-                let _ = window.hide();
+        for existing_label in guard.webviews.values() {
+            if let Some(webview) = app.get_webview(existing_label) {
+                let _ = webview.hide();
             }
         }
         guard.active_id = Some(service_id.clone());
-        guard.windows.insert(service_id.clone(), label.clone());
+        guard.webviews.insert(service_id.clone(), label.clone());
     }
 
-    if let Some(existing) = app.get_webview_window(&label) {
-        apply_bounds(&existing, &bounds)?;
+    if let Some(existing) = app.get_webview(&label) {
+        apply_bounds(&existing, &bounds);
         existing.show().map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -151,20 +166,22 @@ pub fn switch_service(
     let Some(main) = app.get_webview_window("main") else {
         return Err("main window not found".into());
     };
+    // Services are embedded as *child webviews* of the main window rather
+    // than separate owned `WebviewWindow`s. Owned windows are always drawn
+    // above their owner in the OS z-order and live entirely outside the
+    // main window's clipping/bounds, so any bug in the bounds we compute on
+    // the frontend (DPI, multi-monitor, a stale/zero rect) makes them look
+    // like a random detached floating window with no way to close it —
+    // exactly the "opens in a bigger window on top, can't close it" failure
+    // mode this replaces. A child webview can never escape its parent
+    // window's bounds or z-order by construction.
+    let main_window = <tauri::WebviewWindow as AsRef<Webview>>::as_ref(&main).window();
 
     let app_for_nav = app.clone();
     let base_for_nav = base_url.clone();
     let app_for_new = app.clone();
 
-    let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(base_url))
-        .decorations(false)
-        .resizable(false)
-        .skip_taskbar(true)
-        .visible(false)
-        .always_on_top(false)
-        .title(format!("OctoDock — {service_id}"))
-        .parent(&main)
-        .map_err(|e| e.to_string())?
+    let builder = WebviewBuilder::new(&label, WebviewUrl::External(base_url))
         .on_navigation(move |nav_url| {
             if host_allowed(nav_url, &base_for_nav) {
                 true
@@ -178,14 +195,21 @@ pub fn switch_service(
             tauri::webview::NewWindowResponse::Deny
         });
 
-    let window = builder.build().map_err(|e| e.to_string())?;
-    apply_bounds(&window, &bounds)?;
-    window.show().map_err(|e| e.to_string())?;
+    let position = PhysicalPosition::new(bounds.x.round() as i32, bounds.y.round() as i32);
+    let size = PhysicalSize::new(
+        bounds.width.round().max(1.0) as u32,
+        bounds.height.round().max(1.0) as u32,
+    );
+
+    let webview = main_window
+        .add_child(builder, position, size)
+        .map_err(|e| e.to_string())?;
+    webview.show().map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn update_service_bounds(
+pub async fn update_service_bounds(
     app: AppHandle,
     state: State<'_, Mutex<ServiceWindowState>>,
     bounds: WindowBounds,
@@ -194,16 +218,16 @@ pub fn update_service_bounds(
     let Some(active_id) = guard.active_id.as_ref() else {
         return Ok(());
     };
-    let Some(label) = guard.windows.get(active_id) else {
+    let Some(label) = guard.webviews.get(active_id) else {
         return Ok(());
     };
-    if let Some(window) = app.get_webview_window(label) {
-        apply_bounds(&window, &bounds)?;
+    if let Some(webview) = app.get_webview(label) {
+        apply_bounds(&webview, &bounds);
         // Re-showing here is a no-op in the common resize/move case, but it
         // also covers restoring from a minimized main window, where the
         // service webview was hidden and needs to reappear once bounds are
         // known again.
-        window.show().map_err(|e| e.to_string())?;
+        webview.show().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
