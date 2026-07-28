@@ -6,8 +6,8 @@ use std::sync::Mutex;
 use hotkey::{default_hotkey, parse_shortcut};
 use service_window::{
     close_service_webview, hide_all_service_windows, hide_service_windows, open_url_in_browser,
-    reload_service, show_active_service, show_active_service_window, switch_service,
-    update_service_bounds, ServiceWindowState,
+    reload_service, show_active_service, show_active_service_window, start_idle_unload_ticker,
+    switch_service, update_service_bounds, ServiceWindowState,
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -345,6 +345,8 @@ pub fn run() {
             // Keep the tray handle alive for the app lifetime (dropping it
             // can remove the icon / break menu events on some platforms).
             app.manage(tray);
+
+            start_idle_unload_ticker(app.handle().clone());
 
             Ok(())
         })

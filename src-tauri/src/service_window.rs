@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -8,6 +9,11 @@ use tauri::{
 };
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
+
+/// Inactive (non-active) service webviews older than this are closed to free memory.
+pub const IDLE_UNLOAD_AFTER: Duration = Duration::from_secs(15 * 60);
+/// How often the idle-unload background tick runs.
+pub const IDLE_UNLOAD_TICK: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +36,8 @@ pub struct ServiceWindowState {
     pub urls: HashMap<String, String>,
     /// Extra hosts allowed for in-webview navigation (SSO, CDNs, etc.).
     pub allowed_hosts: HashMap<String, Vec<String>>,
+    /// Last time each service webview was shown as the active embed.
+    pub last_active_at: HashMap<String, Instant>,
     /// Service IDs currently being created. Prevents concurrent `add_child`
     /// races from leaving a webview that exists in wry but not in our map.
     pub pending: HashSet<String>,
@@ -99,7 +107,55 @@ pub fn host_allowed(nav_url: &Url, base_url: &Url, allowed_hosts: &[String]) -> 
 fn take_service_webview(guard: &mut ServiceWindowState, service_id: &str) -> Option<Webview> {
     guard.urls.remove(service_id);
     guard.allowed_hosts.remove(service_id);
+    guard.last_active_at.remove(service_id);
     guard.webviews.remove(service_id)
+}
+
+fn touch_active(guard: &mut ServiceWindowState, service_id: &str) {
+    guard
+        .last_active_at
+        .insert(service_id.to_string(), Instant::now());
+}
+
+/// Close inactive service webviews that have not been shown for `IDLE_UNLOAD_AFTER`.
+pub fn unload_idle_service_webviews(state: &Mutex<ServiceWindowState>) {
+    let Ok(mut guard) = state.lock() else {
+        return;
+    };
+    let now = Instant::now();
+    let active = guard.active_id.clone();
+    let idle_ids: Vec<String> = guard
+        .webviews
+        .keys()
+        .filter(|id| active.as_deref() != Some(id.as_str()))
+        .filter(|id| {
+            guard
+                .last_active_at
+                .get(*id)
+                .map(|at| now.duration_since(*at) >= IDLE_UNLOAD_AFTER)
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect();
+
+    for id in idle_ids {
+        if let Some(webview) = take_service_webview(&mut guard, &id) {
+            let _ = webview.close();
+            log::debug!("Unloaded idle service webview '{id}'");
+        }
+    }
+}
+
+/// Spawn a background tick that unloads idle inactive service webviews.
+pub fn start_idle_unload_ticker(app: AppHandle) {
+    std::thread::Builder::new()
+        .name("octodock-idle-unload".into())
+        .spawn(move || loop {
+            std::thread::sleep(IDLE_UNLOAD_TICK);
+            let state = app.state::<Mutex<ServiceWindowState>>();
+            unload_idle_service_webviews(&state);
+        })
+        .expect("spawn idle-unload ticker");
 }
 
 // Positioning failures must never prevent the webview from being shown —
@@ -166,12 +222,18 @@ pub fn hide_all_service_windows(_app: &AppHandle, state: &Mutex<ServiceWindowSta
 }
 
 pub fn show_active_service(_app: &AppHandle, state: &Mutex<ServiceWindowState>) {
-    if let Ok(guard) = state.lock() {
-        let Some(active_id) = guard.active_id.as_ref() else {
+    if let Ok(mut guard) = state.lock() {
+        let Some(active_id) = guard.active_id.clone() else {
             return;
         };
-        if let Some(webview) = guard.webviews.get(active_id) {
+        let shown = if let Some(webview) = guard.webviews.get(&active_id) {
             let _ = webview.show();
+            true
+        } else {
+            false
+        };
+        if shown {
+            touch_active(&mut guard, &active_id);
         }
     }
 }
@@ -225,9 +287,12 @@ pub async fn switch_service(
             }
         }
 
-        if let Some(existing) = guard.webviews.get(&service_id) {
-            apply_bounds(existing, &bounds);
-            existing.show().map_err(|e| e.to_string())?;
+        if guard.webviews.contains_key(&service_id) {
+            if let Some(existing) = guard.webviews.get(&service_id) {
+                apply_bounds(existing, &bounds);
+                existing.show().map_err(|e| e.to_string())?;
+            }
+            touch_active(&mut guard, &service_id);
             log::debug!("Showing existing service webview '{service_id}'");
             return Ok(());
         }
@@ -314,6 +379,7 @@ pub async fn switch_service(
         guard.urls.insert(service_id.clone(), url);
         guard.allowed_hosts.insert(service_id.clone(), hosts);
         guard.webviews.insert(service_id.clone(), webview);
+        touch_active(&mut guard, &service_id);
     }
 
     log::info!("Created service webview '{service_id}'");

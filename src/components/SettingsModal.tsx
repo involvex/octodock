@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import type { ServiceConfig } from "../hooks/useSettingsStore";
-import { DEFAULT_HOTKEY } from "../lib/settings";
+import {
+  DEFAULT_HOTKEY,
+  SERVICE_PRESETS,
+  isPresetAlreadyAdded,
+  parseAllowedHosts,
+  serviceFromPreset,
+  uniqueServiceId,
+  type ServicePreset,
+} from "../lib/settings";
 import { ServiceIcon } from "./ServiceIcon";
 import { HotkeyRecorderButton } from "./HotkeyRecorder";
 import { toast } from "../lib/toast";
@@ -24,13 +32,6 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "")
     .slice(0, 40);
-}
-
-function parseAllowedHosts(raw: string): string[] {
-  return raw
-    .split(/[,\s]+/)
-    .map((h) => h.trim().toLowerCase())
-    .filter(Boolean);
 }
 
 function hostsToDraft(hosts: string[] | undefined): string {
@@ -139,12 +140,7 @@ export function SettingsModal({
     }
 
     const idBase = slugify(trimmedName) || "service";
-    let id = idBase;
-    let suffix = 1;
-    while (services.some((s) => s.id === id)) {
-      id = `${idBase}-${suffix}`;
-      suffix += 1;
-    }
+    const id = uniqueServiceId(idBase, services);
 
     await onAdd({
       id,
@@ -158,6 +154,12 @@ export function SettingsModal({
     setUrl("");
     setIcon("🌐");
     setAllowedHostsDraft("");
+  };
+
+  const handleAddPreset = async (preset: ServicePreset) => {
+    if (isPresetAlreadyAdded(services, preset)) return;
+    await onAdd(serviceFromPreset(preset, services));
+    toast(`Added ${preset.name}`);
   };
 
   const handleSaveHotkey = async () => {
@@ -378,6 +380,34 @@ export function SettingsModal({
                   </label>
                 </div>
               ))}
+            </div>
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-xs uppercase tracking-wide text-gray-500">
+              Add from preset
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {SERVICE_PRESETS.map((preset) => {
+                const added = isPresetAlreadyAdded(services, preset);
+                return (
+                  <button
+                    key={preset.idPrefix}
+                    type="button"
+                    disabled={added}
+                    title={
+                      added
+                        ? `${preset.name} is already in your list`
+                        : `Add ${preset.name}`
+                    }
+                    onClick={() => void handleAddPreset(preset)}
+                    className="rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span className="mr-1">{preset.icon}</span>
+                    {preset.name}
+                  </button>
+                );
+              })}
             </div>
           </section>
 

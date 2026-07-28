@@ -156,8 +156,8 @@ octodock/
 ### Window Model
 
 - **Main window**: Custom-decorated, starts hidden (`visible: false`), toggled by tray or Alt+Space.
-- **Service windows**: Separate native webviews created as children of the main window. Each service gets its own `WebviewWindow` managed by Rust (`service_window.rs`).
-- **Navigation interception**: External links are opened in the system browser via `tauri-plugin-opener`. Same-family navigation (e.g., Google subdomains) is allowed within the webview.
+- **Service webviews**: Child `Webview`s created via `Window::add_child()` on the main window (not separate `WebviewWindow`s). Handles are stored in `ServiceWindowState` because `app.get_webview(label)` cannot find child webviews.
+- **Navigation interception**: External links open in the system browser via `tauri-plugin-opener`. Same-site, Google/Reddit families, and per-service `allowedHosts` stay in-webview.
 
 ### State Flow
 
@@ -167,16 +167,18 @@ Frontend (React)                    Backend (Rust)
 useSettingsStore ──invoke()──►      switch_service (creates/shows webview)
 useAppState ──────invoke()──►       set_always_on_top
 ServiceContentArea ─invoke()──►     update_service_bounds
+Settings / remove ─invoke()──►      close_service_webview / reload_service
                                     toggle_window_visibility
 ```
 
 ### Settings Persistence
 
 Settings are stored via `@tauri-apps/plugin-store` in a `settings.json` file. Keys include:
-- `services` — Array of `ServiceConfig` (id, name, icon, url)
+- `services` — Array of `ServiceConfig` (id, name, icon, url, `openInBrowser?`, `allowedHosts?`)
 - `lastActiveService` — ID of the last selected service
 - `alwaysOnTop` — Boolean for the pin state
-
+- `hotkey` — Global show/hide shortcut string
+- `hasSeenTrayTip` — First-run tray tip dismissed
 ---
 
 ## Best Practices & Guidelines
@@ -204,10 +206,11 @@ Settings are stored via `@tauri-apps/plugin-store` in a `settings.json` file. Ke
 - **Use `void` prefix** for fire-and-forget async calls in event handlers (e.g., `void appWindow.hide()`).
 - **Custom hooks for state.** All Tauri IPC and state management lives in `src/hooks/`.
 - **Component responsibilities:**
-  - `TitleBar` — Window controls, always-on-top toggle, settings trigger
+  - `TitleBar` — Window controls, always-on-top, open-in-browser, reload (embedded), settings
   - `Sidebar` — Service icon selection
   - `ServiceContentArea` — Measures its own bounds, invokes Rust to position service webviews
-  - `SettingsModal` — Service CRUD (add, remove, reorder)
+  - `SettingsModal` — Service CRUD (add, edit, remove, reorder), presets, hotkey, autostart
+- **In-app shortcuts** (while main window focused, not in inputs): Ctrl/Cmd+1–9 select service; Ctrl+Tab / Ctrl+Shift+Tab next/prev; Ctrl+Shift+O open active URL in browser.
 - **No inline event handlers without `void`.** Tauri `invoke()` returns a Promise; always prefix with `void` in React event handlers to avoid floating promise warnings.
 - **Cleanup on unmount.** `ResizeObserver`, event listeners, and Tauri `onResized`/`onMoved` listeners must be cleaned up in `useEffect` return functions.
 
@@ -221,24 +224,24 @@ Settings are stored via `@tauri-apps/plugin-store` in a `settings.json` file. Ke
 ### Security
 
 - **Never add `'unsafe-eval'`** to the CSP unless absolutely necessary.
-- **Navigation interception** is enforced in Rust (`service_window.rs`). Only same-site and known-family domains are allowed; everything else opens externally.
+- **Navigation interception** is enforced in Rust (`service_window.rs`). Same-site, Google/Reddit families, and per-service `allowedHosts` stay in-webview; everything else opens externally.
 - **`on_new_window` returns `Deny`** — no new OS windows are spawned from webview content.
 - **Capabilities follow least privilege.** Only grant the minimum permissions needed.
 - **External links always open in the system browser**, never in-app.
 
 ### Performance
 
-- **Service webviews are lazily created.** The first switch to a service creates its webview; subsequent switches show/hide it.
+- **Service webviews are lazily created.** The first switch to a service creates its webview; subsequent switches show/hide it. Inactive embeds are unloaded after 15 minutes of idle time and recreated on next switch.
 - **ResizeObserver** syncs service webview bounds efficiently — no polling.
 - **Cargo dev profile** avoids debug symbols and incremental compilation to keep builds fast and the `target/` directory small.
 - **Release builds** use LTO + single codegen unit + symbol stripping for minimal binary size.
 
 ### Adding a New Service
 
-1. Define the `ServiceConfig` in `DEFAULT_SERVICES` (or via the Settings UI at runtime).
+1. Define the `ServiceConfig` in `DEFAULT_SERVICES`, add a `SERVICE_PRESETS` entry, or use Settings (manual / preset) at runtime.
 2. No Rust changes needed — service webviews are created dynamically by `service_window.rs`.
-3. If the service domain family is not auto-allowed, add it to the `host_allowed()` function in `service_window.rs`.
-4. Update the CSP `connect-src` / `frame-src` in `tauri.conf.json` if the service requires it.
+3. If SSO/CDN hosts leave the primary site, set `allowedHosts` on the config (preferred) or extend `host_allowed()` for a whole family.
+4. Update the CSP `connect-src` / `frame-src` in `tauri.conf.json` if the *main* React shell requires it (service child webviews are not bound by that CSP).
 
 ### Adding a New Rust Command
 
