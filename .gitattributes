@@ -1,0 +1,15 @@
+# Normalize line endings so Windows CI (autocrlf) matches local LF checkouts.
+# Without this, `prettier --check` fails on every file on windows-latest.
+* text=auto eol=lf
+
+*.{cmd,bat,ps1} text eol=crlf
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
