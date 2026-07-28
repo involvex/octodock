@@ -5,6 +5,11 @@ export interface ServiceConfig {
   url: string;
   /** When true, do not embed — show open-in-browser panel instead. */
   openInBrowser?: boolean;
+  /**
+   * Extra hostnames allowed for in-webview navigation (SSO, CDN, etc.).
+   * Matched as exact host or subdomain (e.g. `auth0.com` allows `foo.auth0.com`).
+   */
+  allowedHosts?: string[];
 }
 
 export const DEFAULT_HOTKEY = "Alt+Space";

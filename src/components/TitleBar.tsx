@@ -7,15 +7,21 @@ import type { ServiceConfig } from "../hooks/useSettingsStore";
 interface TitleBarProps {
   onOpenSettings: () => void;
   activeService: ServiceConfig | null;
+  /** When true, show Reload (embedded services only). */
+  canReload?: boolean;
 }
 
-export function TitleBar({ onOpenSettings, activeService }: TitleBarProps) {
+export function TitleBar({
+  onOpenSettings,
+  activeService,
+  canReload = false,
+}: TitleBarProps) {
   const { isAlwaysOnTop, toggleAlwaysOnTop } = useAppState();
   const appWindow = getCurrentWindow();
 
-  // Service webviews are separate native windows layered over the content
-  // area, so minimizing/hiding the main window must explicitly hide them too
-  // — otherwise they stay floating on screen with nothing behind them.
+  // Service webviews are child views layered in the content area, so
+  // minimizing/hiding the main window must explicitly hide them too —
+  // otherwise they stay floating on screen with nothing behind them.
   const handleMinimize = () => {
     void invoke("hide_service_windows");
     void appWindow.minimize();
@@ -26,6 +32,10 @@ export function TitleBar({ onOpenSettings, activeService }: TitleBarProps) {
   const handleClose = () => {
     void invoke("hide_service_windows");
     void appWindow.hide();
+  };
+  const handleReload = () => {
+    if (!activeService) return;
+    void invoke("reload_service", { serviceId: activeService.id });
   };
 
   return (
@@ -43,6 +53,17 @@ export function TitleBar({ onOpenSettings, activeService }: TitleBarProps) {
       </div>
 
       <div className="flex items-center h-full">
+        {canReload && activeService ? (
+          <button
+            onClick={handleReload}
+            className="h-full px-3 text-gray-400 hover:bg-gray-800 hover:text-white transition-colors text-xs"
+            title={`Reload ${activeService.name}`}
+            type="button"
+          >
+            ↻ Reload
+          </button>
+        ) : null}
+
         {activeService ? (
           <button
             onClick={() => void openUrl(activeService.url)}

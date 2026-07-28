@@ -5,12 +5,13 @@ use std::sync::Mutex;
 
 use hotkey::{default_hotkey, parse_shortcut};
 use service_window::{
-    hide_all_service_windows, hide_service_windows, open_url_in_browser, show_active_service,
-    show_active_service_window, switch_service, update_service_bounds, ServiceWindowState,
+    close_service_webview, hide_all_service_windows, hide_service_windows, open_url_in_browser,
+    reload_service, show_active_service, show_active_service_window, switch_service,
+    update_service_bounds, ServiceWindowState,
 };
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
@@ -41,6 +42,22 @@ fn log_level_from_env() -> log::LevelFilter {
         log::LevelFilter::Debug
     } else {
         log::LevelFilter::Info
+    }
+}
+
+fn tray_tooltip(hotkey: &str) -> String {
+    if hotkey.is_empty() {
+        "OctoDock".to_string()
+    } else {
+        format!("OctoDock — {hotkey}")
+    }
+}
+
+fn update_tray_tooltip(app: &tauri::AppHandle, hotkey: &str) {
+    if let Some(tray) = app.try_state::<TrayIcon>() {
+        if let Err(e) = tray.set_tooltip(Some(tray_tooltip(hotkey))) {
+            log::warn!("Failed to update tray tooltip: {e}");
+        }
     }
 }
 
@@ -112,9 +129,7 @@ fn toggle_window_visibility(app: tauri::AppHandle) {
     if let Some(window) = app.get_window("main") {
         let visible = window.is_visible().unwrap_or(false);
         let minimized = window.is_minimized().unwrap_or(false);
-        log::warn!(
-            "toggle via Window fallback (visible={visible}, minimized={minimized})"
-        );
+        log::warn!("toggle via Window fallback (visible={visible}, minimized={minimized})");
         if visible && !minimized {
             let state = app.state::<Mutex<ServiceWindowState>>();
             let _ = window.hide();
@@ -182,6 +197,8 @@ fn set_hotkey(
     if guard.current.as_ref() == Some(&shortcut) {
         guard.label = label.clone();
         log::debug!("Hotkey already registered: {label}");
+        drop(guard);
+        update_tray_tooltip(&app, &label);
         return Ok(label);
     }
 
@@ -201,6 +218,8 @@ fn set_hotkey(
     guard.current = Some(shortcut);
     guard.label = label.clone();
     log::info!("Registered hotkey: {label}");
+    drop(guard);
+    update_tray_tooltip(&app, &label);
     Ok(label)
 }
 
@@ -281,11 +300,18 @@ pub fn run() {
 
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_item = MenuItem::with_id(app, "show", "Show/Hide", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &settings_item, &quit_item])?;
+
+            let initial_hotkey = app
+                .state::<Mutex<HotkeyState>>()
+                .lock()
+                .map(|s| s.label.clone())
+                .unwrap_or_else(|_| default_hotkey().to_string());
 
             let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("OctoDock")
+                .tooltip(tray_tooltip(&initial_hotkey))
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
@@ -296,6 +322,10 @@ pub fn run() {
                         }
                         "show" => {
                             toggle_window_visibility(app.clone());
+                        }
+                        "settings" => {
+                            show_main_window(app);
+                            let _ = app.emit("open-settings", ());
                         }
                         _ => {}
                     }
@@ -340,6 +370,8 @@ pub fn run() {
             update_service_bounds,
             hide_service_windows,
             show_active_service_window,
+            close_service_webview,
+            reload_service,
             open_url_in_browser,
             get_hotkey,
             set_hotkey

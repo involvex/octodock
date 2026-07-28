@@ -86,6 +86,7 @@ export function ServiceContentArea({
           serviceId: service.id,
           url: service.url,
           bounds,
+          allowedHosts: service.allowedHosts ?? [],
         });
       } else {
         await invoke("update_service_bounds", { bounds });
@@ -126,6 +127,7 @@ export function ServiceContentArea({
             serviceId: service.id,
             url: service.url,
             bounds,
+            allowedHosts: service.allowedHosts ?? [],
           });
           if (cancelled) return;
           created = true;

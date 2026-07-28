@@ -2,7 +2,7 @@
 
 > **Project:** OctoDock — Desktop multi-service dock
 > **Stack:** Tauri v2, Rust, Bun, React 19, TypeScript, Tailwind CSS
-> **Package Manager:** Bun (>=1.3.0). Do NOT use npm, yarn, or pnpm.
+> **Package Manager:** Bun 1.3.x (pinned `packageManager: bun@1.3.14`). Do NOT use npm, yarn, or pnpm. Avoid Bun 1.4+/canary for installs — it writes `lockfileVersion: 2` that CI cannot parse.
 
 ---
 
@@ -81,7 +81,7 @@ bunx tauri icon path/to/source.png
 |---|---|---|
 | Desktop Framework | Tauri v2 | 2.x |
 | Backend Language | Rust | Edition 2021 (MSRV 1.77.2) |
-| Package Manager | Bun | >=1.3.0 |
+| Package Manager | Bun | 1.3.x (pin 1.3.14) |
 | Frontend Framework | React | 19.x |
 | Language (Frontend) | TypeScript | 5.x (strict mode) |
 | Build Tool | Vite | 8.x |

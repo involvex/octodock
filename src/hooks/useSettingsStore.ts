@@ -128,6 +128,11 @@ export function useSettingsStore() {
 
   const removeService = useCallback(
     async (id: string) => {
+      try {
+        await invoke("close_service_webview", { serviceId: id });
+      } catch (err) {
+        console.warn("close_service_webview failed:", err);
+      }
       const next = services.filter((s) => s.id !== id);
       await persistServices(next.length > 0 ? next : DEFAULT_SERVICES);
       if (activeServiceId === id) {
@@ -156,10 +161,30 @@ export function useSettingsStore() {
 
   const updateService = useCallback(
     async (id: string, patch: Partial<ServiceConfig>) => {
+      const current = services.find((s) => s.id === id);
       const next = services.map((service) =>
         service.id === id ? { ...service, ...patch } : service,
       );
       await persistServices(next);
+
+      const urlChanged =
+        patch.url !== undefined &&
+        current !== undefined &&
+        patch.url !== current.url;
+      const hostsChanged =
+        patch.allowedHosts !== undefined &&
+        JSON.stringify(patch.allowedHosts ?? []) !==
+          JSON.stringify(current?.allowedHosts ?? []);
+
+      // URL / allowlist changes need a fresh child webview so navigation
+      // interception and the loaded document match the new config.
+      if (urlChanged || hostsChanged) {
+        try {
+          await invoke("close_service_webview", { serviceId: id });
+        } catch (err) {
+          console.warn("close_service_webview failed:", err);
+        }
+      }
     },
     [persistServices, services],
   );

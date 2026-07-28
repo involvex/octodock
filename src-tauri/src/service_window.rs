@@ -26,6 +26,10 @@ pub struct ServiceWindowState {
     /// webviews created via `Window::add_child()` — they're registered in
     /// wry's internal map but not in Tauri's `AppHandle` lookup.
     pub webviews: HashMap<String, Webview>,
+    /// URL the webview was created with — used to detect edits that need recreate.
+    pub urls: HashMap<String, String>,
+    /// Extra hosts allowed for in-webview navigation (SSO, CDNs, etc.).
+    pub allowed_hosts: HashMap<String, Vec<String>>,
     /// Service IDs currently being created. Prevents concurrent `add_child`
     /// races from leaving a webview that exists in wry but not in our map.
     pub pending: HashSet<String>,
@@ -43,7 +47,18 @@ fn same_site(a: &Url, b: &Url) -> bool {
         && a.port_or_known_default() == b.port_or_known_default()
 }
 
-pub fn host_allowed(nav_url: &Url, base_url: &Url) -> bool {
+fn host_matches_allowlist(host: &str, allowed_hosts: &[String]) -> bool {
+    let host = host.to_ascii_lowercase();
+    allowed_hosts.iter().any(|entry| {
+        let entry = entry.trim().trim_start_matches('.').to_ascii_lowercase();
+        if entry.is_empty() {
+            return false;
+        }
+        host == entry || host.ends_with(&format!(".{entry}"))
+    })
+}
+
+pub fn host_allowed(nav_url: &Url, base_url: &Url, allowed_hosts: &[String]) -> bool {
     if same_site(nav_url, base_url) {
         return true;
     }
@@ -54,6 +69,10 @@ pub fn host_allowed(nav_url: &Url, base_url: &Url) -> bool {
     let Some(base_host) = base_url.host_str() else {
         return false;
     };
+
+    if host_matches_allowlist(nav_host, allowed_hosts) {
+        return true;
+    }
 
     let google_family = |host: &str| {
         host == "google.com"
@@ -75,6 +94,12 @@ pub fn host_allowed(nav_url: &Url, base_url: &Url) -> bool {
     }
 
     false
+}
+
+fn take_service_webview(guard: &mut ServiceWindowState, service_id: &str) -> Option<Webview> {
+    guard.urls.remove(service_id);
+    guard.allowed_hosts.remove(service_id);
+    guard.webviews.remove(service_id)
 }
 
 // Positioning failures must never prevent the webview from being shown —
@@ -165,9 +190,11 @@ pub async fn switch_service(
     service_id: String,
     url: String,
     bounds: WindowBounds,
+    allowed_hosts: Option<Vec<String>>,
 ) -> Result<(), String> {
     let base_url = Url::parse(&url).map_err(|e| e.to_string())?;
     let label = ServiceWindowState::label_for(&service_id);
+    let hosts = allowed_hosts.unwrap_or_default();
 
     log::debug!("switch_service → {service_id} ({url})");
 
@@ -181,6 +208,22 @@ pub async fn switch_service(
             let _ = webview.hide();
         }
         guard.active_id = Some(service_id.clone());
+
+        let needs_recreate = guard.webviews.contains_key(&service_id)
+            && (guard.urls.get(&service_id).map(String::as_str) != Some(url.as_str())
+                || guard
+                    .allowed_hosts
+                    .get(&service_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    != hosts);
+
+        if needs_recreate {
+            if let Some(old) = take_service_webview(&mut guard, &service_id) {
+                let _ = old.close();
+                log::debug!("Recreating service webview '{service_id}' after URL/hosts change");
+            }
+        }
 
         if let Some(existing) = guard.webviews.get(&service_id) {
             apply_bounds(existing, &bounds);
@@ -217,11 +260,12 @@ pub async fn switch_service(
 
     let app_for_nav = app.clone();
     let base_for_nav = base_url.clone();
+    let hosts_for_nav = hosts.clone();
     let app_for_new = app.clone();
 
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(base_url))
         .on_navigation(move |nav_url| {
-            if host_allowed(nav_url, &base_for_nav) {
+            if host_allowed(nav_url, &base_for_nav, &hosts_for_nav) {
                 true
             } else {
                 open_external(&app_for_nav, nav_url);
@@ -267,10 +311,46 @@ pub async fn switch_service(
     {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         guard.pending.remove(&service_id);
+        guard.urls.insert(service_id.clone(), url);
+        guard.allowed_hosts.insert(service_id.clone(), hosts);
         guard.webviews.insert(service_id.clone(), webview);
     }
 
     log::info!("Created service webview '{service_id}'");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn close_service_webview(
+    state: State<'_, Mutex<ServiceWindowState>>,
+    service_id: String,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    if let Some(webview) = take_service_webview(&mut guard, &service_id) {
+        let _ = webview.close();
+        log::info!("Closed service webview '{service_id}'");
+    }
+    if guard.active_id.as_deref() == Some(service_id.as_str()) {
+        guard.active_id = None;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reload_service(
+    state: State<'_, Mutex<ServiceWindowState>>,
+    service_id: Option<String>,
+) -> Result<(), String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    let id = service_id
+        .or_else(|| guard.active_id.clone())
+        .ok_or_else(|| "no active service".to_string())?;
+    let webview = guard
+        .webviews
+        .get(&id)
+        .ok_or_else(|| format!("service webview '{id}' not found"))?;
+    webview.reload().map_err(|e| e.to_string())?;
+    log::debug!("Reloaded service webview '{id}'");
     Ok(())
 }
 
@@ -328,20 +408,40 @@ mod tests {
     fn allows_same_site_navigation() {
         let base = Url::parse("https://mail.google.com").unwrap();
         let nav = Url::parse("https://mail.google.com/mail/u/0").unwrap();
-        assert!(host_allowed(&nav, &base));
+        assert!(host_allowed(&nav, &base, &[]));
     }
 
     #[test]
     fn allows_google_family_redirects() {
         let base = Url::parse("https://mail.google.com").unwrap();
         let nav = Url::parse("https://accounts.google.com/ServiceLogin").unwrap();
-        assert!(host_allowed(&nav, &base));
+        assert!(host_allowed(&nav, &base, &[]));
     }
 
     #[test]
     fn rejects_unrelated_external_hosts() {
         let base = Url::parse("https://mail.google.com").unwrap();
         let nav = Url::parse("https://example.com").unwrap();
-        assert!(!host_allowed(&nav, &base));
+        assert!(!host_allowed(&nav, &base, &[]));
+    }
+
+    #[test]
+    fn allows_configured_extra_hosts() {
+        let base = Url::parse("https://app.notion.so").unwrap();
+        let nav = Url::parse("https://login.microsoftonline.com/oauth").unwrap();
+        let allowed = vec!["microsoftonline.com".to_string()];
+        assert!(host_allowed(&nav, &base, &allowed));
+    }
+
+    #[test]
+    fn allowlist_matches_subdomains() {
+        assert!(host_matches_allowlist(
+            "foo.auth0.com",
+            &["auth0.com".to_string()]
+        ));
+        assert!(!host_matches_allowlist(
+            "evilauth0.com",
+            &["auth0.com".to_string()]
+        ));
     }
 }
