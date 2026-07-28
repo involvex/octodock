@@ -17,6 +17,8 @@ export interface WindowBounds {
 interface ServiceContentAreaProps {
   service: ServiceConfig | null;
   onUpdateService: (id: string, patch: Partial<ServiceConfig>) => void;
+  /** True when a React overlay (e.g. Settings) must sit above service webviews. */
+  overlayOpen?: boolean;
 }
 
 async function measureBounds(
@@ -46,22 +48,27 @@ async function measureBounds(
 export function ServiceContentArea({
   service,
   onUpdateService,
+  overlayOpen = false,
 }: ServiceContentAreaProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const browserMode = service ? prefersBrowser(service) : false;
 
   useEffect(() => {
+    // Browser-mode CTA has no containerRef — must still hide embedded
+    // webviews, otherwise the previous service stays painted on top.
+    if (!service) return;
+
+    // Native child webviews paint above React. Keep them hidden while any
+    // full-window overlay (Settings) is open so the modal stays usable.
+    if (overlayOpen || browserMode) {
+      void invoke("hide_service_windows");
+      return;
+    }
+
     const el = containerRef.current;
-    if (!el || !service) return;
+    if (!el) return;
 
     let cancelled = false;
-
-    if (browserMode) {
-      void invoke("hide_service_windows");
-      return () => {
-        cancelled = true;
-      };
-    }
 
     const sync = async (switchService: boolean) => {
       // Skip while minimized: the container still reports its pre-minimize
@@ -193,7 +200,7 @@ export function ServiceContentArea({
         }
       });
     };
-  }, [service, browserMode]);
+  }, [service, browserMode, overlayOpen]);
 
   if (!service) {
     return (

@@ -44,35 +44,90 @@ fn log_level_from_env() -> log::LevelFilter {
     }
 }
 
+/// Resolve the main WebviewWindow. Prefer label lookup; fall back to a scan
+/// so tray/hotkey never silently no-op after child webviews exist.
+fn resolve_main_webview(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(w) = app.get_webview_window("main") {
+        return Some(w);
+    }
+    app.webview_windows()
+        .into_iter()
+        .find(|(label, _)| label == "main")
+        .map(|(_, w)| w)
+}
+
 // Service webviews (Gmail, Keep, etc.) are only ever created once the main
 // window is actually shown to the user. Emitting this lets the frontend defer
 // the (potentially slow, sometimes Google-anti-automation-blocked) WebView2
 // creation instead of eagerly spinning one up the instant the app boots
 // hidden into the tray.
 fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = resolve_main_webview(app) {
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
         let _ = window.emit("main-window-shown", ());
         let state = app.state::<Mutex<ServiceWindowState>>();
         show_active_service(app, &state);
         log::debug!("Main window shown");
+        return;
     }
+
+    // Last resort: Window API if WebviewWindow lookup fails.
+    if let Some(window) = app.get_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = app.emit("main-window-shown", ());
+        let state = app.state::<Mutex<ServiceWindowState>>();
+        show_active_service(app, &state);
+        log::warn!("Main window shown via Window fallback");
+        return;
+    }
+
+    let labels: Vec<_> = app.webview_windows().keys().cloned().collect();
+    log::warn!("show_main_window: main not found (webview_windows={labels:?})");
+    eprintln!("show_main_window: main not found (webview_windows={labels:?})");
 }
 
 #[tauri::command]
 fn toggle_window_visibility(app: tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    // Always log entry — a missing window must not be a silent no-op.
+    log::debug!("toggle_window_visibility called");
+
+    if let Some(window) = resolve_main_webview(&app) {
         let visible = window.is_visible().unwrap_or(false);
-        log::debug!("toggle_window_visibility (was_visible={visible})");
-        if visible {
+        let minimized = window.is_minimized().unwrap_or(false);
+        log::debug!("toggle_window_visibility (visible={visible}, minimized={minimized})");
+        if visible && !minimized {
             let state = app.state::<Mutex<ServiceWindowState>>();
             let _ = window.hide();
             hide_all_service_windows(&app, &state);
         } else {
             show_main_window(&app);
         }
+        return;
     }
+
+    if let Some(window) = app.get_window("main") {
+        let visible = window.is_visible().unwrap_or(false);
+        let minimized = window.is_minimized().unwrap_or(false);
+        log::warn!(
+            "toggle via Window fallback (visible={visible}, minimized={minimized})"
+        );
+        if visible && !minimized {
+            let state = app.state::<Mutex<ServiceWindowState>>();
+            let _ = window.hide();
+            hide_all_service_windows(&app, &state);
+        } else {
+            show_main_window(&app);
+        }
+        return;
+    }
+
+    let labels: Vec<_> = app.webview_windows().keys().cloned().collect();
+    log::warn!("toggle_window_visibility: main not found (webview_windows={labels:?})");
+    eprintln!("toggle_window_visibility: main not found (webview_windows={labels:?})");
 }
 
 #[tauri::command]
@@ -179,8 +234,9 @@ pub fn run() {
         )
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == ShortcutState::Pressed {
+                        log::debug!("global shortcut pressed: {shortcut:?}");
                         toggle_window_visibility(app.clone());
                     }
                 })
@@ -227,18 +283,22 @@ pub fn run() {
             let show_item = MenuItem::with_id(app, "show", "Show/Hide", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("OctoDock")
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => {
-                        app.exit(0);
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    log::debug!("tray menu event: {}", event.id.as_ref());
+                    match event.id.as_ref() {
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        "show" => {
+                            toggle_window_visibility(app.clone());
+                        }
+                        _ => {}
                     }
-                    "show" => {
-                        toggle_window_visibility(app.clone());
-                    }
-                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -247,10 +307,14 @@ pub fn run() {
                         ..
                     } = event
                     {
+                        log::debug!("tray left-click");
                         toggle_window_visibility(tray.app_handle().clone());
                     }
                 })
                 .build(app)?;
+            // Keep the tray handle alive for the app lifetime (dropping it
+            // can remove the icon / break menu events on some platforms).
+            app.manage(tray);
 
             Ok(())
         })

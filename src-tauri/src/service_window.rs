@@ -112,21 +112,24 @@ fn open_external(app: &AppHandle, url: &Url) {
     let _ = app.opener().open_url(url.as_str(), None::<&str>);
 }
 
-/// Parent window for child service webviews. Prefer the invoking window
-/// (injected by Tauri from the frontend IPC caller), then fall back to label
-/// lookup — `get_webview_window("main")` can miss from async workers.
-fn parent_window(app: &AppHandle, caller: &WebviewWindow) -> tauri::Window {
-    let from_caller = <WebviewWindow as AsRef<Webview>>::as_ref(caller).window();
-    if from_caller.label() == "main" {
-        return from_caller;
-    }
+/// Parent `Window` for child service webviews.
+///
+/// Do **not** inject `WebviewWindow` as a command argument: after the first
+/// `add_child`, Tauri may attribute IPC to the focused child webview, and
+/// deserializing `WebviewWindow` then fails with
+/// "current webview is not a WebviewWindow". Look up the main window by label.
+fn main_parent_window(app: &AppHandle) -> Result<tauri::Window, String> {
     if let Some(w) = app.get_window("main") {
-        return w;
+        return Ok(w);
     }
     if let Some(ww) = app.get_webview_window("main") {
-        return <WebviewWindow as AsRef<Webview>>::as_ref(&ww).window();
+        return Ok(<WebviewWindow as AsRef<Webview>>::as_ref(&ww).window());
     }
-    from_caller
+    let windows: Vec<_> = app.windows().keys().cloned().collect();
+    let webview_windows: Vec<_> = app.webview_windows().keys().cloned().collect();
+    Err(format!(
+        "main window not found (windows={windows:?}, webview_windows={webview_windows:?})"
+    ))
 }
 
 pub fn hide_all_service_windows(_app: &AppHandle, state: &Mutex<ServiceWindowState>) {
@@ -157,7 +160,6 @@ pub fn show_active_service(_app: &AppHandle, state: &Mutex<ServiceWindowState>) 
 // https://github.com/tauri-apps/wry/issues/583
 #[tauri::command]
 pub async fn switch_service(
-    window: WebviewWindow,
     app: AppHandle,
     state: State<'_, Mutex<ServiceWindowState>>,
     service_id: String,
@@ -167,10 +169,7 @@ pub async fn switch_service(
     let base_url = Url::parse(&url).map_err(|e| e.to_string())?;
     let label = ServiceWindowState::label_for(&service_id);
 
-    log::debug!(
-        "switch_service → {service_id} ({url}) from window '{}'",
-        window.label()
-    );
+    log::debug!("switch_service → {service_id} ({url})");
 
     // Phase 1: Hide all existing webviews and check if we already have this one.
     // We store `Webview` handles directly (not labels) because
@@ -206,7 +205,15 @@ pub async fn switch_service(
     // exactly the "opens in a bigger window on top, can't close it" failure
     // mode this replaces. A child webview can never escape its parent
     // window's bounds or z-order by construction.
-    let main_window = parent_window(&app, &window);
+    let main_window = match main_parent_window(&app) {
+        Ok(w) => w,
+        Err(e) => {
+            if let Ok(mut guard) = state.lock() {
+                guard.pending.remove(&service_id);
+            }
+            return Err(e);
+        }
+    };
 
     let app_for_nav = app.clone();
     let base_for_nav = base_url.clone();

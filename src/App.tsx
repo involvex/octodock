@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { ServiceContentArea } from "./components/ServiceContentArea";
@@ -65,6 +66,17 @@ function App() {
       document.removeEventListener("visibilitychange", handleVisibility);
   }, [ready, hasSeenTrayTip, hotkey, markTrayTipSeen]);
 
+  // Child service webviews paint above the main React UI. Hide them while
+  // Settings is open so the modal is visible and interactive; restore on close.
+  useEffect(() => {
+    if (!ready) return;
+    if (settingsOpen) {
+      void invoke("hide_service_windows");
+    } else {
+      void invoke("show_active_service_window");
+    }
+  }, [settingsOpen, ready]);
+
   return (
     <div className="h-full flex flex-col bg-gray-900 relative">
       <TitleBar
@@ -85,6 +97,7 @@ function App() {
           <ServiceContentArea
             service={activeService}
             onUpdateService={updateService}
+            overlayOpen={settingsOpen}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
