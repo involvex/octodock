@@ -4,17 +4,27 @@ mod service_window;
 use std::sync::Mutex;
 
 use hotkey::{default_hotkey, parse_shortcut};
+use serde::Deserialize;
 use service_window::{
     close_service_webview, hide_all_service_windows, hide_service_windows, open_url_in_browser,
     reload_service, show_active_service, show_active_service_window, start_idle_unload_ticker,
     switch_service, update_service_bounds, ServiceWindowState,
 };
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+const MAX_TRAY_SERVICES: usize = 12;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrayServiceEntry {
+    id: String,
+    name: String,
+}
 
 #[derive(Default)]
 struct HotkeyState {
@@ -59,6 +69,93 @@ fn update_tray_tooltip(app: &tauri::AppHandle, hotkey: &str) {
             log::warn!("Failed to update tray tooltip: {e}");
         }
     }
+}
+
+fn truncate_menu_label(name: &str, max_chars: usize) -> String {
+    let count = name.chars().count();
+    if count <= max_chars {
+        name.to_string()
+    } else {
+        let mut s: String = name.chars().take(max_chars.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    }
+}
+
+fn build_tray_menu(
+    app: &tauri::AppHandle,
+    services: &[TrayServiceEntry],
+) -> Result<Menu<tauri::Wry>, String> {
+    let quit_item =
+        MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).map_err(|e| e.to_string())?;
+    let show_item = MenuItem::with_id(app, "show", "Show/Hide", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+
+    let service_items: Vec<MenuItem<tauri::Wry>> = services
+        .iter()
+        .take(MAX_TRAY_SERVICES)
+        .map(|entry| {
+            MenuItem::with_id(
+                app,
+                format!("service:{}", entry.id),
+                truncate_menu_label(&entry.name, 40),
+                true,
+                None::<&str>,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let service_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = service_items
+        .iter()
+        .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+        .collect();
+
+    let services_submenu =
+        Submenu::with_items(app, "Services", !service_refs.is_empty(), &service_refs)
+            .map_err(|e| e.to_string())?;
+
+    Menu::with_items(
+        app,
+        &[&show_item, &services_submenu, &settings_item, &quit_item],
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
+    log::debug!("tray menu event: {id}");
+    match id {
+        "quit" => {
+            app.exit(0);
+        }
+        "show" => {
+            toggle_window_visibility(app.clone());
+        }
+        "settings" => {
+            show_main_window(app);
+            let _ = app.emit("open-settings", ());
+        }
+        other if other.starts_with("service:") => {
+            let service_id = other.trim_start_matches("service:");
+            show_main_window(app);
+            let _ = app.emit("activate-service", service_id);
+        }
+        _ => {}
+    }
+}
+
+#[tauri::command]
+fn sync_tray_menu(app: tauri::AppHandle, services: Vec<TrayServiceEntry>) -> Result<(), String> {
+    let menu = build_tray_menu(&app, &services)?;
+    if let Some(tray) = app.try_state::<TrayIcon>() {
+        tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
+        log::debug!("Tray menu synced ({} services)", services.len());
+    } else {
+        log::warn!("sync_tray_menu: tray not ready yet");
+    }
+    Ok(())
 }
 
 /// Resolve the main WebviewWindow. Prefer label lookup; fall back to a scan
@@ -298,10 +395,7 @@ pub fn run() {
                 }
             }
 
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let show_item = MenuItem::with_id(app, "show", "Show/Hide", true, None::<&str>)?;
-            let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &settings_item, &quit_item])?;
+            let menu = build_tray_menu(app.handle(), &[])?;
 
             let initial_hotkey = app
                 .state::<Mutex<HotkeyState>>()
@@ -315,20 +409,7 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
-                    log::debug!("tray menu event: {}", event.id.as_ref());
-                    match event.id.as_ref() {
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        "show" => {
-                            toggle_window_visibility(app.clone());
-                        }
-                        "settings" => {
-                            show_main_window(app);
-                            let _ = app.emit("open-settings", ());
-                        }
-                        _ => {}
-                    }
+                    handle_tray_menu_event(app, event.id.as_ref());
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -376,7 +457,8 @@ pub fn run() {
             reload_service,
             open_url_in_browser,
             get_hotkey,
-            set_hotkey
+            set_hotkey,
+            sync_tray_menu
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

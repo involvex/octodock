@@ -61,6 +61,7 @@ export function SettingsModal({
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [icon, setIcon] = useState("🌐");
+  const [iconUrlDraft, setIconUrlDraft] = useState("");
   const [allowedHostsDraft, setAllowedHostsDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [hotkeyDraft, setHotkeyDraft] = useState(hotkey);
@@ -70,6 +71,8 @@ export function SettingsModal({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editUrl, setEditUrl] = useState("");
+  const [editIcon, setEditIcon] = useState("");
+  const [editIconUrl, setEditIconUrl] = useState("");
   const [editHosts, setEditHosts] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -95,6 +98,8 @@ export function SettingsModal({
     setEditingId(service.id);
     setEditName(service.name);
     setEditUrl(service.url);
+    setEditIcon(service.icon);
+    setEditIconUrl(service.iconUrl ?? "");
     setEditHosts(hostsToDraft(service.allowedHosts));
     setEditError(null);
   };
@@ -108,6 +113,7 @@ export function SettingsModal({
     setEditError(null);
     const trimmedName = editName.trim();
     const trimmedUrl = editUrl.trim();
+    const trimmedIconUrl = editIconUrl.trim();
     if (!trimmedName || !trimmedUrl) {
       setEditError("Name and URL are required.");
       return;
@@ -116,9 +122,15 @@ export function SettingsModal({
       setEditError("URL must be a valid http(s) address.");
       return;
     }
+    if (trimmedIconUrl && !isValidHttpUrl(trimmedIconUrl)) {
+      setEditError("Icon URL must be a valid http(s) address.");
+      return;
+    }
     await onUpdateService(id, {
       name: trimmedName,
       url: trimmedUrl,
+      icon: editIcon.trim() || "🌐",
+      iconUrl: trimmedIconUrl || undefined,
       allowedHosts: parseAllowedHosts(editHosts),
     });
     setEditingId(null);
@@ -129,6 +141,7 @@ export function SettingsModal({
     setError(null);
     const trimmedName = name.trim();
     const trimmedUrl = url.trim();
+    const trimmedIconUrl = iconUrlDraft.trim();
     if (!trimmedName || !trimmedUrl) {
       setError("Name and URL are required.");
       return;
@@ -136,6 +149,10 @@ export function SettingsModal({
 
     if (!isValidHttpUrl(trimmedUrl)) {
       setError("URL must start with http:// or https://");
+      return;
+    }
+    if (trimmedIconUrl && !isValidHttpUrl(trimmedIconUrl)) {
+      setError("Icon URL must start with http:// or https://");
       return;
     }
 
@@ -146,6 +163,7 @@ export function SettingsModal({
       id,
       name: trimmedName,
       icon: icon.trim() || "🌐",
+      iconUrl: trimmedIconUrl || undefined,
       url: trimmedUrl,
       openInBrowser: false,
       allowedHosts: parseAllowedHosts(allowedHostsDraft),
@@ -153,6 +171,7 @@ export function SettingsModal({
     setName("");
     setUrl("");
     setIcon("🌐");
+    setIconUrlDraft("");
     setAllowedHostsDraft("");
   };
 
@@ -282,6 +301,22 @@ export function SettingsModal({
                         className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white"
                         aria-label="Service URL"
                       />
+                      <div className="grid grid-cols-[64px_1fr] gap-2">
+                        <input
+                          value={editIcon}
+                          onChange={(e) => setEditIcon(e.target.value)}
+                          className="rounded-md border border-gray-700 bg-gray-900 px-2 py-2 text-center text-lg"
+                          aria-label="Emoji icon"
+                          title="Emoji fallback"
+                        />
+                        <input
+                          value={editIconUrl}
+                          onChange={(e) => setEditIconUrl(e.target.value)}
+                          placeholder="Icon image URL (optional)"
+                          className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white"
+                          aria-label="Icon URL"
+                        />
+                      </div>
                       <input
                         value={editHosts}
                         onChange={(e) => setEditHosts(e.target.value)}
@@ -433,6 +468,12 @@ export function SettingsModal({
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://example.com"
+              className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white"
+            />
+            <input
+              value={iconUrlDraft}
+              onChange={(e) => setIconUrlDraft(e.target.value)}
+              placeholder="Icon image URL (optional)"
               className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white"
             />
             <input

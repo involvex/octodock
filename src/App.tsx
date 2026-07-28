@@ -107,6 +107,35 @@ function App() {
     };
   }, []);
 
+  // Tray Services submenu → jump to that service in the dock.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void listen<string>("activate-service", (event) => {
+      const id = event.payload;
+      if (!id) return;
+      setSettingsOpen(false);
+      void setActiveService(id);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [setActiveService]);
+
+  // Keep the tray Services submenu in sync with Settings.
+  useEffect(() => {
+    if (!ready) return;
+    void invoke("sync_tray_menu", {
+      services: services.map((s) => ({ id: s.id, name: s.name })),
+    }).catch((err: unknown) => {
+      console.warn("sync_tray_menu failed:", err);
+    });
+  }, [ready, services]);
+
   // In-app service shortcuts (not global — only while the main window is focused).
   useEffect(() => {
     if (!ready) return;

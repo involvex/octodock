@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ServiceConfig } from "../hooks/useSettingsStore";
-import { faviconUrl } from "../lib/settings";
+import { resolveServiceIconSrc } from "../lib/settings";
 
 interface ServiceIconProps {
   service: ServiceConfig;
@@ -9,17 +9,18 @@ interface ServiceIconProps {
 }
 
 /**
- * Shows the service's real favicon when available, falling back to its
- * configured emoji glyph if the icon fails to load (offline, blocked host,
- * or a custom service whose favicon proxy lookup fails).
+ * Shows a product-specific / custom icon when available, otherwise the
+ * configured emoji. Avoids the Google favicon proxy for known Google apps
+ * (it collapses Gmail/Keep/Calendar/… to the same colorful G).
  */
 export function ServiceIcon({
   service,
   className = "w-5 h-5",
   textClassName = "text-lg",
 }: ServiceIconProps) {
-  const src = faviconUrl(service.url);
-  const [failed, setFailed] = useState(false);
+  const src = resolveServiceIconSrc(service);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const failed = src !== null && failedSrc === src;
 
   if (!src || failed) {
     return <span className={textClassName}>{service.icon}</span>;
@@ -29,8 +30,8 @@ export function ServiceIcon({
     <img
       src={src}
       alt=""
-      className={`${className} object-contain`}
-      onError={() => setFailed(true)}
+      className={`${className} object-contain rounded-sm`}
+      onError={() => setFailedSrc(src)}
     />
   );
 }

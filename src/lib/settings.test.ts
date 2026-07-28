@@ -8,6 +8,7 @@ import {
   normalizeHotkey,
   parseAllowedHosts,
   prefersBrowser,
+  resolveServiceIconSrc,
   serviceFromPreset,
   serviceHost,
   uniqueServiceId,
@@ -112,5 +113,45 @@ describe("settings helpers", () => {
   test("SERVICE_PRESETS have unique id prefixes", () => {
     const prefixes = SERVICE_PRESETS.map((p) => p.idPrefix);
     expect(new Set(prefixes).size).toBe(prefixes.length);
+  });
+
+  test("resolveServiceIconSrc gives distinct Gmail and Keep icons", () => {
+    const gmail = DEFAULT_SERVICES.find((s) => s.id === "gmail")!;
+    const keep = DEFAULT_SERVICES.find((s) => s.id === "keep")!;
+    const gmailSrc = resolveServiceIconSrc(gmail);
+    const keepSrc = resolveServiceIconSrc(keep);
+    expect(gmailSrc).toBeTruthy();
+    expect(keepSrc).toBeTruthy();
+    expect(gmailSrc).not.toBe(keepSrc);
+    expect(gmailSrc).not.toContain("s2/favicons");
+    expect(keepSrc).not.toContain("s2/favicons");
+  });
+
+  test("resolveServiceIconSrc prefers custom iconUrl", () => {
+    expect(
+      resolveServiceIconSrc({
+        id: "gmail",
+        url: "https://mail.google.com",
+        iconUrl: "https://example.com/custom.png",
+      }),
+    ).toBe("https://example.com/custom.png");
+  });
+
+  test("resolveServiceIconSrc skips favicon for ambiguous Google hosts", () => {
+    expect(
+      resolveServiceIconSrc({
+        id: "my-docs",
+        url: "https://docs.google.com/document",
+      }),
+    ).toBeNull();
+  });
+
+  test("resolveServiceIconSrc uses favicon for non-Google hosts", () => {
+    expect(
+      resolveServiceIconSrc({
+        id: "example",
+        url: "https://example.com",
+      }),
+    ).toBe("https://www.google.com/s2/favicons?domain=example.com&sz=64");
   });
 });

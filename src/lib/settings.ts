@@ -3,6 +3,11 @@ export interface ServiceConfig {
   name: string;
   icon: string;
   url: string;
+  /**
+   * Optional explicit icon image URL. Wins over known product icons and the
+   * favicon proxy (useful when Google apps would otherwise all show the same G).
+   */
+  iconUrl?: string;
   /** When true, do not embed — show open-in-browser panel instead. */
   openInBrowser?: boolean;
   /**
@@ -18,6 +23,7 @@ export interface ServicePreset {
   name: string;
   icon: string;
   url: string;
+  iconUrl?: string;
   openInBrowser?: boolean;
   allowedHosts?: string[];
 }
@@ -31,11 +37,56 @@ export const DEFAULT_HOTKEY = "Alt+Space";
 // block) defaults to embedding.
 export const GOOGLE_EMBED_BLOCKED_IDS = new Set(["gmail", "keep", "calendar"]);
 
+/** Stable Google Workspace product logos (distinct — not the generic G favicon). */
+const GSTATIC_PRODUCT = {
+  gmail:
+    "https://www.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png",
+  keep: "https://www.gstatic.com/images/branding/product/1x/keep_2020q4_48dp.png",
+  calendar:
+    "https://www.gstatic.com/images/branding/product/1x/calendar_2020q4_48dp.png",
+  drive:
+    "https://www.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png",
+  chat: "https://www.gstatic.com/images/branding/product/1x/chat_2020q4_48dp.png",
+  meet: "https://www.gstatic.com/images/branding/product/1x/meet_2020q4_48dp.png",
+} as const;
+
+/**
+ * Known product icons by service id prefix. `null` = skip favicon, use emoji
+ * (favicon proxy would return an ambiguous Google G).
+ */
+const KNOWN_ICON_BY_ID: Record<string, string | null> = {
+  gmail: GSTATIC_PRODUCT.gmail,
+  keep: GSTATIC_PRODUCT.keep,
+  calendar: GSTATIC_PRODUCT.calendar,
+  drive: GSTATIC_PRODUCT.drive,
+  chat: GSTATIC_PRODUCT.chat,
+  meet: GSTATIC_PRODUCT.meet,
+  gemini: null,
+  docs: null,
+  sheets: null,
+  slides: null,
+};
+
+/** Hostname → product icon (same semantics as KNOWN_ICON_BY_ID). */
+const KNOWN_ICON_BY_HOST: Record<string, string | null> = {
+  "mail.google.com": GSTATIC_PRODUCT.gmail,
+  "keep.google.com": GSTATIC_PRODUCT.keep,
+  "calendar.google.com": GSTATIC_PRODUCT.calendar,
+  "drive.google.com": GSTATIC_PRODUCT.drive,
+  "chat.google.com": GSTATIC_PRODUCT.chat,
+  "meet.google.com": GSTATIC_PRODUCT.meet,
+  "gemini.google.com": null,
+  "docs.google.com": null,
+  "sheets.google.com": null,
+  "slides.google.com": null,
+};
+
 export const DEFAULT_SERVICES: ServiceConfig[] = [
   {
     id: "gmail",
     name: "Gmail",
     icon: "📧",
+    iconUrl: GSTATIC_PRODUCT.gmail,
     url: "https://mail.google.com",
     openInBrowser: true,
   },
@@ -43,6 +94,7 @@ export const DEFAULT_SERVICES: ServiceConfig[] = [
     id: "keep",
     name: "Keep",
     icon: "📝",
+    iconUrl: GSTATIC_PRODUCT.keep,
     url: "https://keep.google.com",
     openInBrowser: true,
   },
@@ -57,6 +109,7 @@ export const DEFAULT_SERVICES: ServiceConfig[] = [
     id: "calendar",
     name: "Calendar",
     icon: "📅",
+    iconUrl: GSTATIC_PRODUCT.calendar,
     url: "https://calendar.google.com",
     openInBrowser: true,
   },
@@ -132,6 +185,47 @@ export function faviconUrl(url: string, size = 64): string | null {
   }
 }
 
+function knownIconForId(id: string): string | null | undefined {
+  const exact = KNOWN_ICON_BY_ID[id];
+  if (exact !== undefined) return exact;
+  const prefix = Object.keys(KNOWN_ICON_BY_ID).find(
+    (key) => id === key || id.startsWith(`${key}-`),
+  );
+  return prefix ? KNOWN_ICON_BY_ID[prefix] : undefined;
+}
+
+function isAmbiguousGoogleHost(host: string): boolean {
+  return (
+    host === "google.com" ||
+    host.endsWith(".google.com") ||
+    host === "googleusercontent.com" ||
+    host.endsWith(".googleusercontent.com")
+  );
+}
+
+/**
+ * Image URL for the sidebar/settings icon, or `null` to render the emoji glyph.
+ * Order: custom iconUrl → known product map → favicon (non-ambiguous hosts).
+ */
+export function resolveServiceIconSrc(
+  service: Pick<ServiceConfig, "id" | "url" | "iconUrl">,
+): string | null {
+  const custom = service.iconUrl?.trim();
+  if (custom) return custom;
+
+  const byId = knownIconForId(service.id);
+  if (byId !== undefined) return byId;
+
+  const host = serviceHost(service.url);
+  if (host) {
+    const byHost = KNOWN_ICON_BY_HOST[host];
+    if (byHost !== undefined) return byHost;
+    if (isAmbiguousGoogleHost(host)) return null;
+  }
+
+  return faviconUrl(service.url);
+}
+
 export function normalizeHotkey(input: string): string {
   return input
     .split("+")
@@ -202,6 +296,7 @@ export function serviceFromPreset(
     id: uniqueServiceId(preset.idPrefix, services),
     name: preset.name,
     icon: preset.icon,
+    iconUrl: preset.iconUrl,
     url: preset.url,
     openInBrowser: preset.openInBrowser ?? false,
     allowedHosts: preset.allowedHosts ? [...preset.allowedHosts] : undefined,
