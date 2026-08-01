@@ -413,6 +413,11 @@ export function SettingsModal({
                     />
                     Open in browser (recommended for Google sign-in)
                   </label>
+                  <p className="ml-6 text-xs text-gray-500">
+                    Embedded services use a private WebView2 profile that
+                    doesn&apos;t share cookies with Chrome or Edge. If a site
+                    blocks embedded sign-in, turn this on.
+                  </p>
                 </div>
               ))}
             </div>

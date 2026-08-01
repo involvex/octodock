@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CLOUDFLARE_EMBED_BLOCKED_IDS,
   DEFAULT_SERVICES,
+  GOOGLE_EMBED_BLOCKED_IDS,
   SERVICE_PRESETS,
   faviconUrl,
   isLikelyHotkey,
@@ -153,5 +155,30 @@ describe("settings helpers", () => {
         url: "https://example.com",
       }),
     ).toBe("https://www.google.com/s2/favicons?domain=example.com&sz=64");
+  });
+
+  test("x.com preset includes twitter/twimg/t.co allowlist", () => {
+    const x = SERVICE_PRESETS.find((p) => p.idPrefix === "x")!;
+    expect(x).toBeDefined();
+    expect(x.url).toBe("https://x.com");
+    expect(x.openInBrowser).toBe(false);
+    expect(x.allowedHosts).toEqual([
+      "twitter.com",
+      "twimg.com",
+      "t.co",
+      "x.com",
+    ]);
+  });
+
+  test("grok preset defaults to open-in-browser", () => {
+    const grok = SERVICE_PRESETS.find((p) => p.idPrefix === "grok")!;
+    expect(grok).toBeDefined();
+    expect(grok.openInBrowser).toBe(true);
+    expect(prefersBrowser(serviceFromPreset(grok, []))).toBe(true);
+  });
+
+  test("embed-blocked sets identify grok and google services", () => {
+    expect(GOOGLE_EMBED_BLOCKED_IDS.has("gmail")).toBe(true);
+    expect(CLOUDFLARE_EMBED_BLOCKED_IDS.has("grok")).toBe(true);
   });
 });

@@ -101,6 +101,26 @@ pub fn host_allowed(nav_url: &Url, base_url: &Url, allowed_hosts: &[String]) -> 
         return true;
     }
 
+    // X / Twitter SPA loads its assets from twitter.com, twimg.com, and
+    // t.co subdomains, and any user who navigates from x.com to twitter.com
+    // (or vice versa) is still inside the same product. Treat the whole
+    // family as same-site so the SPA stays embedded without each user
+    // having to manually configure an allowlist.
+    let x_family = |host: &str| {
+        host == "x.com"
+            || host.ends_with(".x.com")
+            || host == "twitter.com"
+            || host.ends_with(".twitter.com")
+            || host == "twimg.com"
+            || host.ends_with(".twimg.com")
+            || host == "t.co"
+            || host.ends_with(".t.co")
+    };
+
+    if x_family(base_host) && x_family(nav_host) {
+        return true;
+    }
+
     false
 }
 
@@ -481,6 +501,21 @@ mod tests {
     fn allows_google_family_redirects() {
         let base = Url::parse("https://mail.google.com").unwrap();
         let nav = Url::parse("https://accounts.google.com/ServiceLogin").unwrap();
+        assert!(host_allowed(&nav, &base, &[]));
+    }
+
+    #[test]
+    fn allows_x_family_redirects() {
+        let base = Url::parse("https://x.com").unwrap();
+        let nav = Url::parse("https://abs.twimg.com/stuff").unwrap();
+        assert!(host_allowed(&nav, &base, &[]));
+
+        let base = Url::parse("https://x.com").unwrap();
+        let nav = Url::parse("https://twitter.com/i/flow/login").unwrap();
+        assert!(host_allowed(&nav, &base, &[]));
+
+        let base = Url::parse("https://twitter.com").unwrap();
+        let nav = Url::parse("https://t.co/abc").unwrap();
         assert!(host_allowed(&nav, &base, &[]));
     }
 

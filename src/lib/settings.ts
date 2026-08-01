@@ -37,6 +37,12 @@ export const DEFAULT_HOTKEY = "Alt+Space";
 // block) defaults to embedding.
 export const GOOGLE_EMBED_BLOCKED_IDS = new Set(["gmail", "keep", "calendar"]);
 
+// xAI Grok gates sign-in behind a Cloudflare challenge that detects the
+// embedded WebView2 environment, opens the challenge in the external
+// browser, and never returns usable session cookies to the dock. Same UX
+// shape as the Google block — default to the browser fallback.
+export const CLOUDFLARE_EMBED_BLOCKED_IDS = new Set(["grok"]);
+
 /** Stable Google Workspace product logos (distinct — not the generic G favicon). */
 const GSTATIC_PRODUCT = {
   gmail:
@@ -164,6 +170,21 @@ export const SERVICE_PRESETS: ServicePreset[] = [
     url: "https://discord.com/app",
     openInBrowser: false,
     allowedHosts: ["discord.com", "discordapp.com", "discord.gg"],
+  },
+  {
+    idPrefix: "x",
+    name: "X (Twitter)",
+    icon: "𝕏",
+    url: "https://x.com",
+    openInBrowser: false,
+    allowedHosts: ["twitter.com", "twimg.com", "t.co", "x.com"],
+  },
+  {
+    idPrefix: "grok",
+    name: "Grok",
+    icon: "✨",
+    url: "https://grok.com",
+    openInBrowser: true,
   },
 ];
 

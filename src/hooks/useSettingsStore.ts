@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { load, type Store } from "@tauri-apps/plugin-store";
 import {
+  CLOUDFLARE_EMBED_BLOCKED_IDS,
   DEFAULT_HOTKEY,
   DEFAULT_SERVICES,
   GOOGLE_EMBED_BLOCKED_IDS,
@@ -18,7 +19,7 @@ export { DEFAULT_SERVICES, DEFAULT_HOTKEY };
 // already-persisted settings.json files. Each migration is applied at most
 // once per store (gated by comparing against the last-applied version), so
 // re-toggling "Try embedding anyway" afterwards is never overwritten again.
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 
 async function getStore(): Promise<Store> {
   const store = await load("settings.json", { autoSave: true });
@@ -36,6 +37,17 @@ async function getStore(): Promise<Store> {
       if (
         version < 2 &&
         GOOGLE_EMBED_BLOCKED_IDS.has(service.id) &&
+        service.openInBrowser !== true
+      ) {
+        return { ...service, openInBrowser: true };
+      }
+      // v3: Grok's Cloudflare challenge opens in the external browser and
+      // never returns the session cookies to the embedded webview, so
+      // `openInBrowser` must default to true for any existing grok entry
+      // added before this was documented.
+      if (
+        version < 3 &&
+        CLOUDFLARE_EMBED_BLOCKED_IDS.has(service.id) &&
         service.openInBrowser !== true
       ) {
         return { ...service, openInBrowser: true };
